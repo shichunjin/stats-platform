@@ -1,0 +1,54 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Guacamole user-mapping.xml
+  每个用户映射一个独立的 RDP 连接，禁用剪贴板和驱动器映射。
+  实际生产中建议用 Guacamole 的 MySQL/PostgreSQL 存储连接配置。
+-->
+<user-mapping>
+
+    <!-- 演示用户1 -->
+    <authorize username="user1" password="user123">
+        <connection name="RStudio Session">
+            <protocol>rdp</protocol>
+            <param name="hostname">10.0.1.100</param>
+            <param name="port">3389</param>
+            <param name="username">user1</param>
+            <param name="password">ad_password_here</param>
+            <param name="security">nla</param>
+            <param name="ignore-cert">true</param>
+            <param name="resize-method">display-update</param>
+            <!-- 禁用剪贴板 -->
+            <param name="enable-clipboard">false</param>
+            <!-- 禁用文件传输/驱动器映射 -->
+            <param name="enable-drive">false</param>
+            <param name="enable-printing">false</param>
+            <!-- 每用户独立会话 -->
+            <param name="create-recording-path">true</param>
+            <param name="recording-path">/var/log/guacamole/recordings/user1</param>
+            <!-- 分辨率 -->
+            <param name="width">1920</param>
+            <param name="height">1080</param>
+            <param name="color-depth">32</param>
+        </connection>
+    </authorize>
+
+    <!-- 演示用户2 -->
+    <authorize username="admin" password="admin123">
+        <connection name="Admin RDP Session">
+            <protocol>rdp</protocol>
+            <param name="hostname">10.0.1.100</param>
+            <param name="port">3389</param>
+            <param name="username">admin</param>
+            <param name="password">ad_admin_password_here</param>
+            <param name="security">nla</param>
+            <param name="ignore-cert">true</param>
+            <param name="enable-clipboard">false</param>
+            <param name="enable-drive">false</param>
+            <param name="enable-printing">false</param>
+            <param name="width">1920</param>
+            <param name="height">1080</param>
+            <param name="color-depth">32</param>
+        </connection>
+    </authorize>
+
+</user-mapping>

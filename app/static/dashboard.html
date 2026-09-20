@@ -1,0 +1,459 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>统计软件托管平台 - 控制台</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif; }
+
+        body { min-height: 100vh; background: #f3f4f6; color: #1f2937; }
+
+        .header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: #fff;
+            padding: 16px 32px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+        }
+
+        .header h1 { font-size: 20px; font-weight: 500; }
+        .header .user-info { font-size: 14px; opacity: 0.95; }
+
+        .btn-logout {
+            background: rgba(255, 255, 255, 0.2);
+            border: 1px solid rgba(255, 255, 255, 0.4);
+            color: #fff;
+            padding: 6px 14px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 13px;
+            margin-left: 12px;
+            transition: background 0.2s;
+        }
+
+        .btn-logout:hover { background: rgba(255, 255, 255, 0.3); }
+
+        .container { max-width: 1100px; margin: 32px auto; padding: 0 20px; }
+
+        .section {
+            background: #fff;
+            border-radius: 10px;
+            padding: 24px;
+            margin-bottom: 20px;
+            box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
+        }
+
+        .section h2 {
+            font-size: 17px;
+            margin-bottom: 16px;
+            padding-bottom: 12px;
+            border-bottom: 1px solid #e5e7eb;
+            color: #111827;
+        }
+
+        .grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+            gap: 14px;
+        }
+
+        .software-card {
+            border: 1px solid #e5e7eb;
+            border-radius: 8px;
+            padding: 18px;
+            cursor: pointer;
+            transition: all 0.2s;
+            text-align: center;
+        }
+
+        .software-card:hover {
+            border-color: #667eea;
+            box-shadow: 0 4px 12px rgba(102, 126, 234, 0.15);
+            transform: translateY(-2px);
+        }
+
+        .software-card .icon { font-size: 36px; margin-bottom: 10px; }
+        .software-card .name { font-size: 15px; font-weight: 600; color: #1f2937; }
+        .software-card .desc { font-size: 12px; color: #6b7280; margin-top: 6px; }
+
+        .status {
+            display: inline-block;
+            padding: 3px 10px;
+            border-radius: 12px;
+            font-size: 12px;
+            margin-left: 8px;
+        }
+
+        .status.idle { background: #f3f4f6; color: #6b7280; }
+        .status.active { background: #dcfce7; color: #16a34a; }
+        .status.ended { background: #fee2e2; color: #dc2626; }
+
+        table { width: 100%; border-collapse: collapse; font-size: 14px; }
+        th, td { padding: 10px 12px; text-align: left; border-bottom: 1px solid #f3f4f6; }
+        th { color: #6b7280; font-weight: 500; font-size: 13px; }
+        tr:hover { background: #f9fafb; }
+
+        .empty { text-align: center; color: #9ca3af; padding: 24px; font-size: 14px; }
+
+        .btn {
+            background: #667eea;
+            color: #fff;
+            border: none;
+            padding: 8px 16px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 13px;
+            transition: background 0.2s;
+        }
+
+        .btn:hover { background: #5561e0; }
+        .btn-sm { padding: 4px 10px; font-size: 12px; }
+
+        .actions { display: flex; gap: 8px; align-items: center; }
+        .links { display: flex; gap: 16px; align-items: center; font-size: 13px; }
+        .links a { color: rgba(255, 255, 255, 0.9); text-decoration: none; }
+        .links a:hover { text-decoration: underline; }
+
+        .toast {
+            position: fixed;
+            bottom: 30px;
+            right: 30px;
+            background: #1f2937;
+            color: #fff;
+            padding: 12px 20px;
+            border-radius: 6px;
+            font-size: 14px;
+            box-shadow: 0 8px 24px rgba(0, 0, 0, 0.2);
+            opacity: 0;
+            transform: translateY(20px);
+            transition: all 0.3s;
+            z-index: 999;
+        }
+
+        .toast.show { opacity: 1; transform: translateY(0); }
+        .toast.success { background: #16a34a; }
+        .toast.error { background: #dc2626; }
+
+        .session-item {
+            padding: 10px 14px;
+            background: #f9fafb;
+            border-radius: 6px;
+            margin-bottom: 8px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            font-size: 13px;
+        }
+
+        .session-item .name { font-weight: 500; }
+        .session-item .meta { color: #6b7280; font-size: 12px; }
+        .session-item .open-link a {
+            color: #667eea;
+            text-decoration: none;
+            font-size: 12px;
+        }
+        .session-item .open-link a:hover { text-decoration: underline; }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>统计软件托管平台</h1>
+        <div class="links">
+            <a href="/docs" target="_blank">API 文档</a>
+            <span class="user-info">
+                当前用户：<strong id="current-user">-</strong>
+                <span id="current-role" class="status idle">-</span>
+            </span>
+            <button class="btn-logout" onclick="logout()">退出</button>
+        </div>
+    </div>
+
+    <div class="container">
+        <div class="section">
+            <h2>启动统计软件</h2>
+            <div class="grid">
+                <div class="software-card" onclick="launchSoftware('rstudio')">
+                    <div class="icon">📊</div>
+                    <div class="name">RStudio</div>
+                    <div class="desc">R 语言集成开发环境</div>
+                </div>
+                <div class="software-card" onclick="launchSoftware('mplus')">
+                    <div class="icon">📈</div>
+                    <div class="name">Mplus Editor</div>
+                    <div class="desc">结构方程模型分析</div>
+                </div>
+                <div class="software-card" onclick="launchSoftware('stata')">
+                    <div class="icon">📋</div>
+                    <div class="name">StataSE 18</div>
+                    <div class="desc">统计与经济分析</div>
+                </div>
+            </div>
+            <div id="active-sessions" style="margin-top: 16px;"></div>
+        </div>
+
+        <div class="section">
+            <h2>我的结果文件
+                <button class="btn btn-sm" style="float: right;" onclick="scanResults()">扫描审查新文件</button>
+            </h2>
+            <h3 style="font-size: 14px; color: #6b7280; margin: 12px 0 8px;">待审查</h3>
+            <table id="pending-table">
+                <thead>
+                    <tr>
+                        <th>文件名</th>
+                        <th>类型</th>
+                        <th>状态</th>
+                        <th>原因</th>
+                        <th>创建时间</th>
+                    </tr>
+                </thead>
+                <tbody id="pending-body">
+                    <tr><td colspan="5" class="empty">加载中...</td></tr>
+                </tbody>
+            </table>
+            <h3 style="font-size: 14px; color: #6b7280; margin: 20px 0 8px;">已发布（可下载）</h3>
+            <table id="published-table">
+                <thead>
+                    <tr>
+                        <th>文件名</th>
+                        <th>大小</th>
+                        <th>下载次数</th>
+                        <th>发布时间</th>
+                        <th>操作</th>
+                    </tr>
+                </thead>
+                <tbody id="published-body">
+                    <tr><td colspan="5" class="empty">加载中...</td></tr>
+                </tbody>
+            </table>
+        </div>
+
+        <div class="section" id="admin-section" style="display: none;">
+            <h2>管理员 · 审计日志</h2>
+            <table>
+                <thead>
+                    <tr>
+                        <th>时间</th>
+                        <th>用户ID</th>
+                        <th>操作</th>
+                        <th>详情</th>
+                    </tr>
+                </thead>
+                <tbody id="audit-body">
+                    <tr><td colspan="4" class="empty">加载中...</td></tr>
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    <div class="toast" id="toast"></div>
+
+    <script>
+        const API_BASE = '';
+        let accessToken = localStorage.getItem('access_token');
+
+        function authHeaders() {
+            return { 'Authorization': 'Bearer ' + accessToken, 'Content-Type': 'application/json' };
+        }
+
+        function showToast(type, message) {
+            const el = document.getElementById('toast');
+            el.className = 'toast ' + type + ' show';
+            el.textContent = message;
+            setTimeout(() => el.className = 'toast', 3000);
+        }
+
+        function formatDate(s) {
+            if (!s) return '-';
+            return new Date(s).toLocaleString('zh-CN');
+        }
+
+        function formatSize(b) {
+            if (!b) return '-';
+            if (b < 1024) return b + ' B';
+            if (b < 1024 * 1024) return (b / 1024).toFixed(1) + ' KB';
+            return (b / 1024 / 1024).toFixed(2) + ' MB';
+        }
+
+        async function loadMe() {
+            try {
+                const resp = await fetch(API_BASE + '/auth/me', { headers: authHeaders() });
+                if (!resp.ok) { logout(); return; }
+                const data = await resp.json();
+                document.getElementById('current-user').textContent = data.display_name || data.username;
+                const roleEl = document.getElementById('current-role');
+                roleEl.textContent = data.role === 'admin' ? '管理员' : '普通用户';
+                roleEl.className = 'status ' + (data.role === 'admin' ? 'active' : 'idle');
+                if (data.role === 'admin') {
+                    document.getElementById('admin-section').style.display = 'block';
+                    loadAudit();
+                }
+            } catch (e) {
+                logout();
+            }
+        }
+
+        async function launchSoftware(software) {
+            try {
+                const resp = await fetch(`${API_BASE}/session/launch/${software}`, {
+                    method: 'POST',
+                    headers: authHeaders(),
+                });
+                const data = await resp.json();
+                if (!resp.ok) {
+                    showToast('error', data.detail || '启动失败');
+                    return;
+                }
+                showToast('success', `${software} 会话已启动`);
+                renderActiveSession(data);
+            } catch (err) {
+                showToast('error', '网络错误：' + err.message);
+            }
+        }
+
+        function renderActiveSession(session) {
+            const container = document.getElementById('active-sessions');
+            const item = document.createElement('div');
+            item.className = 'session-item';
+            item.innerHTML = `
+                <div>
+                    <div class="name">${session.software}</div>
+                    <div class="meta">启动于 ${formatDate(session.launched_at)}</div>
+                </div>
+                <div class="actions">
+                    <span class="status active">活跃</span>
+                    <span class="open-link"><a href="${session.guac_url}" target="_blank">打开浏览器会话 →</a></span>
+                </div>
+            `;
+            container.prepend(item);
+        }
+
+        async function loadResults() {
+            try {
+                const resp = await fetch(API_BASE + '/results/mine', { headers: authHeaders() });
+                const data = await resp.json();
+
+                const pendingBody = document.getElementById('pending-body');
+                pendingBody.innerHTML = '';
+                if (!data.pending || data.pending.length === 0) {
+                    pendingBody.innerHTML = '<tr><td colspan="5" class="empty">暂无待审查文件</td></tr>';
+                } else {
+                    data.pending.forEach(p => {
+                        const tr = document.createElement('tr');
+                        tr.innerHTML = `
+                            <td>${p.file_name}</td>
+                            <td>${p.file_type || '-'}</td>
+                            <td><span class="status ${p.status === 'approved' ? 'active' : 'ended'}">${{pending:'待审',approved:'通过',rejected:'拒绝'}[p.status]}</span></td>
+                            <td>${p.review_reason || '-'}</td>
+                            <td>${formatDate(p.created_at)}</td>
+                        `;
+                        pendingBody.appendChild(tr);
+                    });
+                }
+
+                const pubBody = document.getElementById('published-body');
+                pubBody.innerHTML = '';
+                if (!data.published || data.published.length === 0) {
+                    pubBody.innerHTML = '<tr><td colspan="5" class="empty">暂无可下载结果</td></tr>';
+                } else {
+                    data.published.forEach(p => {
+                        const tr = document.createElement('tr');
+                        tr.innerHTML = `
+                            <td>${p.result_name}</td>
+                            <td>${formatSize(p.file_size)}</td>
+                            <td>${p.download_count}</td>
+                            <td>${formatDate(p.created_at)}</td>
+                            <td><button class="btn btn-sm" onclick="downloadResult(${p.id})">下载</button></td>
+                        `;
+                        pubBody.appendChild(tr);
+                    });
+                }
+            } catch (err) {
+                showToast('error', '加载结果失败：' + err.message);
+            }
+        }
+
+        async function scanResults() {
+            try {
+                const resp = await fetch(API_BASE + '/results/scan', {
+                    method: 'POST',
+                    headers: authHeaders(),
+                });
+                const data = await resp.json();
+                if (!resp.ok) {
+                    showToast('error', data.detail || '扫描失败');
+                    return;
+                }
+                const approved = data.results.filter(r => r.status === 'approved').length;
+                const rejected = data.results.filter(r => r.status === 'rejected').length;
+                showToast('success', `扫描 ${data.scanned} 个文件：通过 ${approved} / 拒绝 ${rejected}`);
+                loadResults();
+            } catch (err) {
+                showToast('error', '网络错误：' + err.message);
+            }
+        }
+
+        function downloadResult(id) {
+            // 用 fetch + blob 下载，以便带 Authorization 头
+            fetch(`${API_BASE}/results/${id}/download`, {
+                method: 'POST',
+                headers: authHeaders(),
+            }).then(r => {
+                if (!r.ok) throw new Error('下载失败');
+                const disp = r.headers.get('content-disposition') || '';
+                const m = disp.match(/filename="?([^"]+)"?/i);
+                const filename = m ? m[1] : `result_${id}`;
+                return r.blob().then(b => {
+                    const url = URL.createObjectURL(b);
+                    const a = document.createElement('a');
+                    a.href = url;
+                    a.download = filename;
+                    a.click();
+                    URL.revokeObjectURL(url);
+                });
+            }).catch(e => showToast('error', e.message));
+        }
+
+        async function loadAudit() {
+            try {
+                const resp = await fetch(API_BASE + '/admin/audit?limit=50', { headers: authHeaders() });
+                const data = await resp.json();
+                const body = document.getElementById('audit-body');
+                body.innerHTML = '';
+                if (!data || data.length === 0) {
+                    body.innerHTML = '<tr><td colspan="4" class="empty">暂无审计日志</td></tr>';
+                } else {
+                    data.forEach(a => {
+                        const tr = document.createElement('tr');
+                        tr.innerHTML = `
+                            <td>${formatDate(a.created_at)}</td>
+                            <td>${a.user_id || '-'}</td>
+                            <td>${a.action}</td>
+                            <td>${a.detail || '-'}</td>
+                        `;
+                        body.appendChild(tr);
+                    });
+                }
+            } catch (e) {
+                // 非管理员忽略
+            }
+        }
+
+        function logout() {
+            localStorage.removeItem('access_token');
+            localStorage.removeItem('username');
+            window.location.href = '/login';
+        }
+
+        // 启动加载
+        if (!accessToken) {
+            window.location.href = '/login';
+        } else {
+            loadMe();
+            loadResults();
+        }
+    </script>
+</body>
+</html>
