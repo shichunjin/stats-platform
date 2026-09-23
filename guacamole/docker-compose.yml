@@ -4,9 +4,14 @@
 #
 # 架构：浏览器 → guacamole(Web) → guacd(RDP 后端) → Windows 云主机 8.133.223.251
 #
-# 使用：
-#   1. 复制 .env.example 为 .env 并填入真实密码
-#   2. docker compose up -d
+# 认证：PostgreSQL JDBC（官方 Docker 镜像不支持 user-mapping.xml 文件认证）
+#
+# 首次部署步骤：
+#   1. 生成数据库初始化脚本 initdb.sql：
+#        docker run --rm guacamole/guacamole:1.5.5 /opt/guacamole/bin/initdb.sh --postgresql > initdb.sql
+#   2. cp .env.example .env 并填入 POSTGRES_PASSWORD
+#   3. docker compose up -d
+#   4. 默认管理员 guacadmin / guacadmin 登录，创建用户与 RDP 连接
 # ============================================================
 
 services:
@@ -17,6 +22,19 @@ services:
     volumes:
       - ./recordings:/var/log/guacamole/recordings
 
+  # PostgreSQL 数据库（存储用户、连接、权限等）
+  postgres:
+    image: postgres:15-alpine
+    restart: always
+    environment:
+      POSTGRES_DB: guacamole_db
+      POSTGRES_USER: guacamole_user
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - ./db-data:/var/lib/postgresql/data
+      # 首次启动时自动执行 initdb.sql 初始化 schema（需预先生成）
+      - ./initdb.sql:/docker-entrypoint-initdb.d/initdb.sql:ro
+
   # Guacamole Web 前端（浏览器访问入口）
   guacamole:
     image: guacamole/guacamole:1.5.5
@@ -26,13 +44,12 @@ services:
     environment:
       GUACD_HOSTNAME: guacd
       GUACD_PORT: "4822"
-      # user-mapping.xml 中 ${VAR} 引用的密码（从 .env 读取，不硬编码）
-      GUAC_USER1_PASSWORD: ${GUAC_USER1_PASSWORD}
-      GUAC_ADMIN_PASSWORD: ${GUAC_ADMIN_PASSWORD}
-      RDP_USER1_PASSWORD: ${RDP_USER1_PASSWORD}
-      RDP_ADMIN_PASSWORD: ${RDP_ADMIN_PASSWORD}
-    volumes:
-      # 挂载用户映射配置（文件认证模式，无 postgres 环境变量时自动启用）
-      - ./user-mapping.xml:/etc/guacamole/user-mapping.xml:ro
+      # PostgreSQL JDBC 认证
+      POSTGRESQL_HOSTNAME: postgres
+      POSTGRESQL_PORT: "5432"
+      POSTGRESQL_DATABASE: guacamole_db
+      POSTGRESQL_USER: guacamole_user
+      POSTGRESQL_PASSWORD: ${POSTGRES_PASSWORD}
     depends_on:
       - guacd
+      - postgres

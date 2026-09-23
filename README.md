@@ -40,9 +40,10 @@ stats-platform/
 │       ├── session.py          # POST /session/launch/{software}
 │       ├── results.py           # GET /results/mine, POST /results/scan, POST /results/{id}/download
 │       └── admin.py            # GET /admin/audit, GET /admin/pending
-├── guacamole/                  # Guacamole 配置
-│   ├── guacd-config.properties # Guacamole 属性配置
-│   └── user-mapping.xml        # 用户-连接映射（禁用剪贴板/驱动器）
+├── guacamole/                  # Guacamole 部署配置
+│   ├── docker-compose.yml      # guacd + postgres + guacamole 三容器编排
+│   ├── nginx-guacamole.conf    # Nginx 反向代理 + WebSocket + HTTPS
+│   └── .env.example            # 数据库密码环境变量模板
 ├── powershell/                 # Windows 脚本
 │   ├── setup-rdsh.ps1          # RDS 会话主机部署脚本（装角色/配许可/建本地用户，无域环境）
 │   ├── login.ps1               # 用户登录脚本（映射 Z:/W: 盘、环境变量、快捷方式）
@@ -208,22 +209,62 @@ sudo dnf makecache
 sudo dnf install -y docker-ce docker-ce-cli containerd.io docker-compose-plugin
 sudo systemctl enable --now docker
 
+# ①b 配置镜像加速器（国内无法直连 Docker Hub，必须配置，否则拉取镜像超时）
+# 说明：阿里云个人版镜像加速器已停用，改用 DaoCloud 公开加速器
+sudo mkdir -p /etc/docker
+sudo tee /etc/docker/daemon.json > /dev/null <<'EOF'
+{
+  "registry-mirrors": [
+    "https://docker.m.daocloud.io"
+  ]
+}
+EOF
+sudo systemctl daemon-reload
+sudo systemctl restart docker
+
+# 备选：若 DaoCloud 加速器不稳定，可用代理站前缀直接拉取镜像
+# sudo docker pull docker.m.daocloud.io/guacamole/guacd:1.5.5
+# sudo docker pull docker.m.daocloud.io/guacamole/guacamole:1.5.5
+# sudo docker tag docker.m.daocloud.io/guacamole/guacd:1.5.5 guacamole/guacd:1.5.5
+# sudo docker tag docker.m.daocloud.io/guacamole/guacamole:1.5.5 guacamole/guacamole:1.5.5
+
 # ② 将 guacamole 目录上传到服务器，进入该目录
 cd guacamole
 
-# ③ 配置密码（环境变量，不入库）
-cp .env.example .env
-vim .env   # 填入 GUAC_* 和 RDP_* 四个真实密码
+# ③ 生成数据库初始化脚本 initdb.sql（PostgreSQL JDBC 认证 schema）
+#    注意：Guacamole 官方 Docker 镜像不支持 user-mapping.xml 文件认证，
+#          必须使用数据库（JDBC）/ LDAP / RADIUS 认证，这里用 PostgreSQL。
+docker run --rm guacamole/guacamole:1.5.5 /opt/guacamole/bin/initdb.sh --postgresql > initdb.sql
 
-# ④ 启动
+# ④ 配置数据库密码（环境变量，不入库）
+cp .env.example .env
+vim .env   # 填入 POSTGRES_PASSWORD
+
+# ⑤ 启动（首次启动会自动执行 initdb.sql 初始化数据库）
 sudo docker compose up -d
 
-# ⑤ 验证
-sudo docker compose ps          # 两个容器应为 running
+# ⑥ 验证
+sudo docker compose ps          # 三个容器应为 running（guacd/postgres/guacamole）
 sudo docker compose logs guacamole   # 查看日志无报错
 ```
 
-**访问**：`http://<Linux服务器IP>:8080/guacamole/`，用 `user1` / `admin` 登录。
+**首次登录**：`http://<Linux服务器IP>:8080/guacamole/`，默认管理员 `guacadmin` / `guacadmin`（登录后请立即修改密码）。
+
+**创建用户与 RDP 连接**（登录后在 Web UI 操作）：
+1. 「设置 → 用户」新建用户（如 `user1`）
+2. 「设置 → 连接」新建连接：协议选 `RDP`，主机填 `8.133.223.251`，端口 `3389`，填 Windows 本地账户密码
+3. 在「连接 → 用户」页给用户分配可用的连接
+
+**RDP 连接安全参数**（在连接编辑页的「参数」区手动添加，实现原始数据保护）：
+
+| 参数名 | 值 | 作用 |
+|--------|-----|------|
+| `security` | `nla` | 网络级认证 |
+| `ignore-cert` | `true` | 忽略证书 |
+| `disable-copy` | `true` | 禁用剪贴板复制 |
+| `disable-paste` | `true` | 禁用剪贴板粘贴 |
+| `disable-drive` | `true` | 禁用本地驱动器映射 |
+| `disable-printing` | `true` | 禁用打印重定向 |
 
 **配置 HTTPS（域名 chunjindevelop68.xyz）**：用 Nginx 反向代理 8080 端口（已提供 `guacamole/nginx-guacamole.conf`）。步骤：
 
