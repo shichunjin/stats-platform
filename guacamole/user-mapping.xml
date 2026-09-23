@@ -3,17 +3,26 @@
   Guacamole user-mapping.xml
   每个用户映射一个独立的 RDP 连接，禁用剪贴板和驱动器映射。
   实际生产中建议用 Guacamole 的 MySQL/PostgreSQL 存储连接配置。
+
+  隐私配置说明：
+  - 所有密码均通过环境变量引用（${VAR} 语法），不在此文件中明文存放。
+  - 部署时需在 Guacamole 服务进程环境中设置以下变量：
+      GUAC_USER1_PASSWORD   —— 普通用户登录 Guacamole 的密码
+      GUAC_ADMIN_PASSWORD   —— 管理员登录 Guacamole 的密码
+      RDP_USER1_PASSWORD    —— 普通用户登录 Windows RDP 的本地账户密码
+      RDP_ADMIN_PASSWORD    —— 管理员登录 Windows RDP 的本地账户密码
+  - 若使用 systemd 管理 Guacamole，可在服务单元的 Environment= 中配置。
 -->
 <user-mapping>
 
     <!-- 演示用户1 -->
-    <authorize username="user1" password="user123">
+    <authorize username="user1" password="${GUAC_USER1_PASSWORD}">
         <connection name="RStudio Session">
             <protocol>rdp</protocol>
-            <param name="hostname">10.0.1.100</param>
+            <param name="hostname">8.133.223.251</param>
             <param name="port">3389</param>
             <param name="username">user1</param>
-            <param name="password">ad_password_here</param>
+            <param name="password">${RDP_USER1_PASSWORD}</param>
             <param name="security">nla</param>
             <param name="ignore-cert">true</param>
             <param name="resize-method">display-update</param>
@@ -33,13 +42,13 @@
     </authorize>
 
     <!-- 演示用户2 -->
-    <authorize username="admin" password="admin123">
+    <authorize username="admin" password="${GUAC_ADMIN_PASSWORD}">
         <connection name="Admin RDP Session">
             <protocol>rdp</protocol>
-            <param name="hostname">10.0.1.100</param>
+            <param name="hostname">8.133.223.251</param>
             <param name="port">3389</param>
             <param name="username">admin</param>
-            <param name="password">ad_admin_password_here</param>
+            <param name="password">${RDP_ADMIN_PASSWORD}</param>
             <param name="security">nla</param>
             <param name="ignore-cert">true</param>
             <param name="enable-clipboard">false</param>

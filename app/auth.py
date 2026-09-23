@@ -16,11 +16,18 @@ from app.models import User
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/auth/login", auto_error=False)
 
-# 简单演示：实际环境对接 AD/LDAP
-DEMO_USERS = {
-    "admin": "admin123",
-    "user1": "user123",
+# 演示账号元数据（用户名 -> (显示名, 角色)）
+DEMO_ACCOUNTS = {
+    "admin": ("管理员", "admin"),
+    "user1": ("测试用户1", "user"),
 }
+
+# 演示账号密码（从环境变量读取，未配置的账号默认禁用登录）
+DEMO_USERS = {}
+if settings.demo_admin_password:
+    DEMO_USERS["admin"] = settings.demo_admin_password
+if settings.demo_user_password:
+    DEMO_USERS["user1"] = settings.demo_user_password
 
 
 # ---- 密码哈希（使用 pbkdf2_hmac，无需额外依赖） ----

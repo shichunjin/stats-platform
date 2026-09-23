@@ -5,7 +5,7 @@ from app.database import get_db
 from app.models import User, AuditLog
 from app.auth import (
     verify_password, create_access_token, get_current_user, hash_password,
-    DEMO_USERS,
+    DEMO_ACCOUNTS,
 )
 from app.schemas import (
     LoginRequest, TokenResponse, UserOut, RegisterRequest, RegisterResponse,
@@ -26,8 +26,8 @@ router = APIRouter(prefix="/auth", tags=["认证"])
 - `400`：用户名已被占用或参数校验失败
 """)
 def register(req: RegisterRequest, db: Session = Depends(get_db)):
-    # 用户名查重（包含演示账号）
-    if req.username in DEMO_USERS:
+    # 用户名查重（包含演示账号保留名）
+    if req.username in DEMO_ACCOUNTS:
         raise HTTPException(status_code=400, detail=f"用户名 '{req.username}' 已被占用")
     existing = db.query(User).filter(User.username == req.username).first()
     if existing:

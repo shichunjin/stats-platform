@@ -1,10 +1,12 @@
-"""管理员路由: GET /admin/audit, GET /admin/pending"""
-from fastapi import APIRouter, Depends, Query
+"""管理员路由: 审计日志 / 待审查文件 / 用户与数据权限管理"""
+from fastapi import APIRouter, Depends, Query, HTTPException
 from sqlalchemy.orm import Session
 from app.database import get_db
-from app.models import User, AuditLog, PendingFile
+from app.models import User, AuditLog, PendingFile, Scope
 from app.auth import get_current_user, require_admin
-from app.schemas import AuditLogOut, PendingFileOut
+from app.schemas import (
+    AuditLogOut, PendingFileOut, UserAdminOut, ScopeOut, ScopeAssignRequest,
+)
 
 router = APIRouter(prefix="/admin", tags=["管理员"])
 
@@ -54,3 +56,91 @@ def get_all_pending(
 ):
     """查看所有待审查文件（管理员）"""
     return db.query(PendingFile).order_by(PendingFile.created_at.desc()).all()
+
+
+@router.get("/users", response_model=list[UserAdminOut], summary="查看所有用户", description="""
+**查看所有用户及其数据权限（仅管理员）**
+
+返回用户列表，每个用户包含所属部门（dept）和可访问的项目范围（scopes）。
+
+**错误码**
+- `401`：未认证
+- `403`：非管理员
+""")
+def get_all_users(
+    admin: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    """查看所有用户（管理员）"""
+    return db.query(User).order_by(User.id).all()
+
+
+@router.get("/scopes", response_model=list[ScopeOut], summary="查看所有数据范围", description="""
+**查看所有数据范围（仅管理员）**
+
+返回部门/项目范围列表，用于给用户分配数据权限。
+
+**错误码**
+- `401`：未认证
+- `403`：非管理员
+""")
+def get_all_scopes(
+    admin: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    """查看所有数据范围（管理员）"""
+    return db.query(Scope).order_by(Scope.id).all()
+
+
+@router.put("/users/{user_id}/scopes", response_model=UserAdminOut, summary="分配用户数据权限", description="""
+**给指定用户分配数据权限（仅管理员）**
+
+- `dept_id`：设置用户所属部门（可为 null 清空）
+- `scope_ids`：设置用户可访问的项目范围列表（覆盖式，传空数组即清空）
+
+**说明**
+本平台**不对软件做权限区分**，所有用户均可使用全部软件；用户之间的唯一区别是此处的数据权限。
+
+**错误码**
+- `401`：未认证
+- `403`：非管理员
+- `404`：用户不存在
+- `400`：引用的范围 ID 不存在
+""")
+def assign_user_scopes(
+    user_id: int,
+    req: ScopeAssignRequest,
+    admin: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    """分配用户数据权限（管理员）"""
+    user = db.query(User).filter(User.id == user_id).first()
+    if user is None:
+        raise HTTPException(status_code=404, detail="用户不存在")
+
+    # 校验 dept_id
+    if req.dept_id is not None:
+        dept = db.query(Scope).filter(Scope.id == req.dept_id).first()
+        if dept is None:
+            raise HTTPException(status_code=400, detail=f"部门范围 ID {req.dept_id} 不存在")
+        user.dept_id = req.dept_id
+    else:
+        user.dept_id = None
+
+    # 校验并重建 scopes（覆盖式）
+    if req.scope_ids:
+        scopes = db.query(Scope).filter(Scope.id.in_(req.scope_ids)).all()
+        if len(scopes) != len(set(req.scope_ids)):
+            raise HTTPException(status_code=400, detail="存在无效的范围 ID")
+        user.scopes = scopes
+    else:
+        user.scopes = []
+
+    db.add(AuditLog(
+        user_id=admin.id,
+        action="assign_scopes",
+        detail=f"为用户 {user.username}(id={user_id}) 分配数据权限: dept_id={req.dept_id}, scopes={req.scope_ids}",
+    ))
+    db.commit()
+    db.refresh(user)
+    return user

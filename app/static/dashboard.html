@@ -231,7 +231,33 @@
         </div>
 
         <div class="section" id="admin-section" style="display: none;">
-            <h2>管理员 · 审计日志</h2>
+            <h2>管理员 · 用户数据权限分配</h2>
+            <p style="font-size:12px;color:#6b7280;margin:0 0 12px;">
+                所有用户均可使用全部软件，用户之间的唯一区别是数据权限（部门 / 项目范围）。
+            </p>
+            <div style="display:flex;gap:12px;flex-wrap:wrap;align-items:flex-end;margin-bottom:16px;">
+                <div>
+                    <label style="display:block;font-size:13px;margin-bottom:4px;">选择用户</label>
+                    <select id="scope-user-select" onchange="onUserSelect()" style="padding:8px;border:1px solid #d1d5db;border-radius:6px;min-width:180px;">
+                        <option value="">加载中...</option>
+                    </select>
+                </div>
+                <div>
+                    <label style="display:block;font-size:13px;margin-bottom:4px;">所属部门</label>
+                    <select id="scope-dept-select" style="padding:8px;border:1px solid #d1d5db;border-radius:6px;min-width:180px;">
+                        <option value="">无</option>
+                    </select>
+                </div>
+                <div>
+                    <button class="btn btn-sm" onclick="saveUserScopes()">保存权限</button>
+                </div>
+            </div>
+            <div style="margin-bottom:16px;">
+                <label style="display:block;font-size:13px;margin-bottom:6px;">可访问项目范围</label>
+                <div id="scope-project-checkboxes" style="display:flex;flex-wrap:wrap;gap:10px;"></div>
+            </div>
+
+            <h2 style="margin-top:24px;">审计日志</h2>
             <table>
                 <thead>
                     <tr>
@@ -289,6 +315,8 @@
                 if (data.role === 'admin') {
                     document.getElementById('admin-section').style.display = 'block';
                     loadAudit();
+                    loadUsers();
+                    loadScopes();
                 }
             } catch (e) {
                 logout();
@@ -438,6 +466,119 @@
                 }
             } catch (e) {
                 // 非管理员忽略
+            }
+        }
+
+        // ---- 用户数据权限分配 ----
+        let usersData = [];
+        let scopesData = [];
+
+        async function loadUsers() {
+            try {
+                const resp = await fetch(API_BASE + '/admin/users', { headers: authHeaders() });
+                const data = await resp.json();
+                if (!resp.ok) return;
+                usersData = data;
+                renderUserOptions();
+            } catch (e) { /* 非管理员忽略 */ }
+        }
+
+        async function loadScopes() {
+            try {
+                const resp = await fetch(API_BASE + '/admin/scopes', { headers: authHeaders() });
+                const data = await resp.json();
+                if (!resp.ok) return;
+                scopesData = data;
+                renderScopeControls();
+            } catch (e) { /* 非管理员忽略 */ }
+        }
+
+        function renderUserOptions() {
+            const sel = document.getElementById('scope-user-select');
+            sel.innerHTML = '';
+            if (!usersData.length) {
+                sel.innerHTML = '<option value="">暂无用户</option>';
+                return;
+            }
+            usersData.forEach(u => {
+                const opt = document.createElement('option');
+                opt.value = u.id;
+                opt.textContent = `${u.display_name || u.username} (${u.username})`;
+                sel.appendChild(opt);
+            });
+            onUserSelect();
+        }
+
+        function renderScopeControls() {
+            // 部门下拉
+            const deptSel = document.getElementById('scope-dept-select');
+            deptSel.innerHTML = '<option value="">无</option>';
+            scopesData.filter(s => s.scope_type === 'dept').forEach(s => {
+                const opt = document.createElement('option');
+                opt.value = s.id;
+                opt.textContent = s.scope_name;
+                deptSel.appendChild(opt);
+            });
+
+            // 项目范围多选
+            const box = document.getElementById('scope-project-checkboxes');
+            box.innerHTML = '';
+            const projects = scopesData.filter(s => s.scope_type === 'project');
+            if (!projects.length) {
+                box.innerHTML = '<span style="color:#9ca3af;font-size:13px;">暂无项目范围</span>';
+                return;
+            }
+            projects.forEach(s => {
+                const label = document.createElement('label');
+                label.style.cssText = 'display:flex;align-items:center;gap:6px;font-size:13px;';
+                label.innerHTML = `<input type="checkbox" value="${s.id}" class="scope-project-check"> ${s.scope_name}`;
+                box.appendChild(label);
+            });
+        }
+
+        function onUserSelect() {
+            const sel = document.getElementById('scope-user-select');
+            const uid = parseInt(sel.value, 10);
+            const user = usersData.find(u => u.id === uid);
+
+            // 回显部门
+            const deptSel = document.getElementById('scope-dept-select');
+            deptSel.value = user && user.dept_id ? String(user.dept_id) : '';
+
+            // 回显项目范围
+            const checkedScopeIds = user ? (user.scopes || []).map(s => s.id) : [];
+            document.querySelectorAll('.scope-project-check').forEach(cb => {
+                cb.checked = checkedScopeIds.includes(parseInt(cb.value, 10));
+            });
+        }
+
+        async function saveUserScopes() {
+            const sel = document.getElementById('scope-user-select');
+            const uid = parseInt(sel.value, 10);
+            if (!uid) { showToast('error', '请先选择用户'); return; }
+
+            const deptId = document.getElementById('scope-dept-select').value;
+            const scopeIds = Array.from(document.querySelectorAll('.scope-project-check:checked'))
+                .map(cb => parseInt(cb.value, 10));
+
+            try {
+                const resp = await fetch(`${API_BASE}/admin/users/${uid}/scopes`, {
+                    method: 'PUT',
+                    headers: authHeaders(),
+                    body: JSON.stringify({
+                        dept_id: deptId ? parseInt(deptId, 10) : null,
+                        scope_ids: scopeIds,
+                    }),
+                });
+                const data = await resp.json();
+                if (!resp.ok) {
+                    showToast('error', data.detail || '保存失败');
+                    return;
+                }
+                showToast('success', '数据权限已更新');
+                loadUsers();
+            } catch (err) {
+                showToast('error', '网络错误：' + err.message);
             }
         }
 

@@ -1,0 +1,38 @@
+# ============================================================
+# 统计软件托管平台 - Guacamole Docker 部署
+# 用途：通过浏览器远程访问 Windows 云主机上的统计软件
+#
+# 架构：浏览器 → guacamole(Web) → guacd(RDP 后端) → Windows 云主机 8.133.223.251
+#
+# 使用：
+#   1. 复制 .env.example 为 .env 并填入真实密码
+#   2. docker compose up -d
+# ============================================================
+
+services:
+  # RDP 后端守护进程（负责实际的 RDP 协议通信）
+  guacd:
+    image: guacamole/guacd:1.5.5
+    restart: always
+    volumes:
+      - ./recordings:/var/log/guacamole/recordings
+
+  # Guacamole Web 前端（浏览器访问入口）
+  guacamole:
+    image: guacamole/guacamole:1.5.5
+    restart: always
+    ports:
+      - "8080:8080"
+    environment:
+      GUACD_HOSTNAME: guacd
+      GUACD_PORT: "4822"
+      # user-mapping.xml 中 ${VAR} 引用的密码（从 .env 读取，不硬编码）
+      GUAC_USER1_PASSWORD: ${GUAC_USER1_PASSWORD}
+      GUAC_ADMIN_PASSWORD: ${GUAC_ADMIN_PASSWORD}
+      RDP_USER1_PASSWORD: ${RDP_USER1_PASSWORD}
+      RDP_ADMIN_PASSWORD: ${RDP_ADMIN_PASSWORD}
+    volumes:
+      # 挂载用户映射配置（文件认证模式，无 postgres 环境变量时自动启用）
+      - ./user-mapping.xml:/etc/guacamole/user-mapping.xml:ro
+    depends_on:
+      - guacd

@@ -4,8 +4,9 @@
 
 ## 核心特性
 
+- **软件全开放**：所有登录用户均可使用全部统计软件，无软件级权限限制
+- **数据权限隔离**：用户之间的唯一区别是数据权限，每人只能访问自己部门/项目范围内的数据
 - **浏览器远程使用**：通过 Apache Guacamole + RDS，用户在浏览器中即可操作统计软件
-- **数据权限隔离**：每个用户只能访问自己部门/项目范围内的数据（Z: 盘只读）
 - **原始数据保护**：禁用剪贴板、本地驱动器映射、打印重定向，防止数据泄露
 - **结果审查导出**：分析结果经白名单/敏感字段/行数/聚合检查后才能下载
 - **多用户并行**：每用户独立 RDS 会话 + 独立工作区（W: 盘），互不干扰
@@ -43,6 +44,7 @@ stats-platform/
 │   ├── guacd-config.properties # Guacamole 属性配置
 │   └── user-mapping.xml        # 用户-连接映射（禁用剪贴板/驱动器）
 ├── powershell/                 # Windows 脚本
+│   ├── setup-rdsh.ps1          # RDS 会话主机部署脚本（装角色/配许可/建本地用户，无域环境）
 │   ├── login.ps1               # 用户登录脚本（映射 Z:/W: 盘、环境变量、快捷方式）
 │   └── configure-rds.ps1       # RDS 安全配置（禁用剪贴板/驱动器/打印）
 ├── schema.sql                  # PostgreSQL 数据库 DDL
@@ -53,14 +55,18 @@ stats-platform/
 
 | 方法 | 路径 | 说明 | 权限 |
 |------|------|------|------|
+| POST | `/auth/register` | 用户注册（角色固定为 user，无数据权限） | 公开 |
 | POST | `/auth/login` | 登录获取 JWT Token | 公开 |
-| GET | `/me` | 获取当前用户信息与数据范围 | 登录 |
+| GET | `/auth/me` | 获取当前用户信息与数据范围 | 登录 |
 | POST | `/session/launch/{software}` | 启动远程会话（software=rstudo\|mplus\|stata） | 登录 |
 | GET | `/results/mine` | 获取我的待审查文件和已发布结果 | 登录 |
 | POST | `/results/scan` | 扫描 pending 目录并自动审查 | 登录 |
 | POST | `/results/{id}/download` | 下载已发布的结果文件 | 登录 |
 | GET | `/admin/audit` | 查看审计日志 | 管理员 |
 | GET | `/admin/pending` | 查看所有待审查文件 | 管理员 |
+| GET | `/admin/users` | 查看所有用户及其数据权限 | 管理员 |
+| GET | `/admin/scopes` | 查看所有数据范围（部门/项目） | 管理员 |
+| PUT | `/admin/users/{id}/scopes` | 分配用户数据权限（部门+项目范围） | 管理员 |
 
 ## 数据库表
 
@@ -89,6 +95,8 @@ stats-platform/
 
 | 安全要求 | 实现方式 |
 |---------|---------|
+| 软件权限 | 所有登录用户可用全部软件，无软件级权限区分 |
+| 数据权限 | 用户唯一区别，由管理员通过 `/admin/users/{id}/scopes` 分配部门/项目范围 |
 | 原始数据只读 | Z: 盘通过 ACL 设置 ReadAndExecute 权限 |
 | 无本地拷贝 | RDS 禁用本地驱动器映射 + 剪贴板重定向 + 打印重定向 |
 | 数据隔离 | 每用户只映射自己 dept/project 的 Z: 盘 |
@@ -112,7 +120,9 @@ stats-platform/
 
 ```bash
 # 安装 PostgreSQL 并导入 DDL
-sudo -u postgres psql -c "CREATE DATABASE stats_platform;"
+# 注意：下面的数据库密码 'stats123' 仅为示例，请替换为强密码并同步到 .env 的 DATABASE_URL
+
+
 sudo -u postgres psql -c "CREATE USER stats WITH PASSWORD 'stats123';"
 sudo -u postgres psql -c "GRANT ALL ON DATABASE stats_platform TO stats;"
 psql -U stats -d stats_platform -f schema.sql
@@ -129,62 +139,164 @@ cp .env.example .env  # 修改数据库连接、JWT 密钥等
 uvicorn app.main:app --host 0.0.0.0 --port 8000
 ```
 
-### 2. Windows Server 2022（RDS + 统计软件）
+### 2. Windows Server 2022（RDS 会话主机 + 统计软件）
+
+> **部署模式：单机 + 无域 + IP 访问**
+> 本架构仅需 Remote Desktop Session Host 角色，通过 Guacamole → RDP → 服务器 IP 直连，**不需要** Active Directory 域、Connection Broker 或 RDS 部署。
 
 ```powershell
-# 安装 RDS 角色
-Install-WindowsFeature RDS-RD-Server -IncludeManagementTools
-
-# 运行安全配置（禁用剪贴板/驱动器/打印）
+# ① 一键部署会话主机（安装角色 + 配置许可 + 创建本地用户）
+#    以管理员身份运行 PowerShell
 Set-ExecutionPolicy Bypass -Scope Process -Force
+
+# 方式A：批量创建用户（users.csv 含 username,password 两列）
+.\powershell\setup-rdsh.ps1 -UserCsv .\users.csv
+
+# 方式B：创建单个用户（密码运行时提示）
+.\powershell\setup-rdsh.ps1 -NewUser "user1"
+
+# 方式C：仅装角色和配置许可（不建用户）
+.\powershell\setup-rdsh.ps1
+
+# 若提示需要重启，重启后重新运行脚本即可（脚本会检测已安装项自动跳过）
+
+# ② 运行安全配置（禁用剪贴板/驱动器/打印）
 .\powershell\configure-rds.ps1
 Restart-Service -Name TermService -Force
 
-# 安装统计软件
+# ③ 安装统计软件
 # RStudio Desktop → C:\Program Files\RStudio\bin\rstudio.exe
 # Mplus           → C:\Program Files\Mplus\mplus.exe
 # Stata SE 18     → C:\Program Files\Stata18\StataSE-64.exe
 
-# 部署登录脚本到文件服务器
+# ④ 部署登录脚本到文件服务器
 Copy-Item .\powershell\login.ps1 \\fileserver\scripts\login.ps1
-
-# 通过组策略或 RDS 会话启动脚本配置 login.ps1 为用户登录脚本
 ```
 
-### 3. Guacamole
+**重要说明（无域环境）：**
+
+| 项目 | 说明 |
+|------|------|
+| 不装 Connection Broker | `New-RDSessionDeployment` / `Set-RDLicenseConfiguration` 依赖 AD 域，无域环境必然失败，请勿使用 |
+| 登录账户 | Guacamole 登录的是服务器**本地账户**（由 `setup-rdsh.ps1` 创建），非域账户 |
+| 许可宽限期 | 未配置许可服务器时，有 120 天宽限期；生产环境需购买 RDS CAL |
+| 公网域名 | 购买的域名（如 `chunjindevelop68.xyz`）用于给 Guacamole/Web 门户做正式访问入口，与 AD 域无关 |
+
+### 3. Guacamole（Linux 服务器 + Docker）
+
+架构：浏览器 → Guacamole(Web) → guacd(RDP 后端) → Windows 云主机 `8.133.223.251`
+
+> 以下命令以 **Alibaba Cloud Linux 3**（dnf 包管理器）为例。
 
 ```bash
-# 安装 guacd 和 Guacamole Client（参考官方文档）
-# 部署配置文件
-sudo cp guacamole/guacd-config.properties /etc/guacamole/guacamole.properties
-sudo cp guacamole/user-mapping.xml /etc/guacamole/user-mapping.xml
-sudo systemctl restart guacd tomcat9
+# ① 安装 Docker 与 Docker Compose（使用阿里云镜像源）
+sudo dnf install -y dnf-utils device-mapper-persistent-data lvm2
+
+# 手动创建 docker-ce 源，将 $releasever 写死为 8
+# （Alibaba Cloud Linux 3 的 $releasever 可能被错误解析为 4，导致 404）
+sudo rm -f /etc/yum.repos.d/docker-ce.repo
+sudo tee /etc/yum.repos.d/docker-ce.repo > /dev/null <<'EOF'
+[docker-ce-stable]
+name=Docker CE Stable - $basearch
+baseurl=https://mirrors.aliyun.com/docker-ce/linux/centos/8/$basearch/stable
+enabled=1
+gpgcheck=1
+gpgkey=https://mirrors.aliyun.com/docker-ce/linux/centos/gpg
+EOF
+
+sudo dnf makecache
+sudo dnf install -y docker-ce docker-ce-cli containerd.io docker-compose-plugin
+sudo systemctl enable --now docker
+
+# ② 将 guacamole 目录上传到服务器，进入该目录
+cd guacamole
+
+# ③ 配置密码（环境变量，不入库）
+cp .env.example .env
+vim .env   # 填入 GUAC_* 和 RDP_* 四个真实密码
+
+# ④ 启动
+sudo docker compose up -d
+
+# ⑤ 验证
+sudo docker compose ps          # 两个容器应为 running
+sudo docker compose logs guacamole   # 查看日志无报错
 ```
+
+**访问**：`http://<Linux服务器IP>:8080/guacamole/`，用 `user1` / `admin` 登录。
+
+**配置 HTTPS（域名 chunjindevelop68.xyz）**：用 Nginx 反向代理 8080 端口（已提供 `guacamole/nginx-guacamole.conf`）。步骤：
+
+```bash
+# ① 安装 Nginx + certbot
+sudo dnf install -y nginx
+sudo dnf install -y python3-pip
+sudo pip3 install certbot certbot-nginx
+
+# ② 复制配置文件
+sudo cp nginx-guacamole.conf /etc/nginx/conf.d/guacamole.conf
+
+# ③ 申请 SSL 证书（自动修改配置）
+sudo certbot --nginx -d guac.chunjindevelop68.xyz
+
+# ④ 启动并重载 Nginx
+sudo systemctl enable --now nginx
+sudo nginx -t && sudo systemctl reload nginx
+```
+
+完成后通过 `https://guac.chunjindevelop68.xyz/guacamole/` 访问。
+
+> 注意：
+> - nginx 配置中 WebSocket 升级（`Upgrade`/`Connection`）是关键，Guacamole 远程桌面画面依赖它，请勿删除。
+> - 若 `pip3 install certbot` 安装的 `certbot` 命令不在 PATH，可用 `python3 -m certbot` 替代。
+> - 阿里云安全组需放行 80 / 443 / 8080 端口。
 
 ## 环境配置
 
-在 `app/config.py` 中或通过 `.env` 文件配置：
+隐私配置（数据库连接串、JWT 密钥）**不设默认值**，必须通过环境变量或 `.env` 文件提供，缺失时启动会立即报错。
 
-| 配置项 | 默认值 | 说明 |
-|--------|--------|------|
-| `DATABASE_URL` | `postgresql+psycopg2://stats:stats123@localhost:5432/stats_platform` | 数据库连接 |
-| `JWT_SECRET` | `change-me-in-production...` | JWT 签名密钥 |
-| `JWT_EXPIRE_HOURS` | `8` | Token 有效期（小时） |
-| `FILESERVER_ROOT` | `\\fileserver` | 文件服务器根路径 |
-| `RDS_HOST` | `10.0.1.100` | RDS 服务器地址 |
-| `GUACAMOLE_URL` | `https://stats-guac.example.com/#/client/` | Guacamole 前端地址 |
-| `RSTUDIO_PATH` | `C:\Program Files\RStudio\bin\rstudio.exe` | RStudio 安装路径 |
-| `MPLUS_PATH` | `C:\Program Files\Mplus\mplus.exe` | Mplus 安装路径 |
-| `STATA_PATH` | `C:\Program Files\Stata18\StataSE-64.exe` | Stata 安装路径 |
+**快速开始：**
 
-## 默认账号
+```bash
+# 1. 复制模板并填入真实值
+cp .env.example .env
+# 编辑 .env，至少修改 DATABASE_URL 和 JWT_SECRET 两个必填项
 
-| 用户名 | 密码 | 角色 |
-|--------|------|------|
-| `admin` | `admin123` | 管理员 |
-| `user1` | `user123` | 普通用户 |
+# 2. 启动（uvicorn 会自动加载 .env）
+uvicorn app.main:app --host 0.0.0.0 --port 8000
+```
 
-> 生产环境请对接 AD/LDAP 认证，替换 `app/auth.py` 中的演示密码验证。
+**完整配置项：**
+
+| 配置项 | 默认值 | 是否必填 | 说明 |
+|--------|--------|:---:|------|
+| `DATABASE_URL` | 无 | ✅ 必填 | 数据库连接串（含密码） |
+| `JWT_SECRET` | 无 | ✅ 必填 | JWT 签名密钥（建议 `python -c "import secrets; print(secrets.token_hex(32))"` 生成） |
+| `JWT_ALGORITHM` | `HS256` | 否 | JWT 算法 |
+| `JWT_EXPIRE_HOURS` | `8` | 否 | Token 有效期（小时） |
+| `FILESERVER_ROOT` | `\\fileserver` | 否 | 文件服务器根路径 |
+| `RDS_HOST` | `8.133.223.251` | 否 | RDS 服务器地址（Windows 云主机 IP） |
+| `RDS_PORT` | `3389` | 否 | RDP 端口 |
+| `GUACAMOLE_URL` | `https://guac.chunjindevelop68.xyz/#/client/` | 否 | Guacamole 前端地址 |
+| `RSTUDIO_PATH` | `C:\Program Files\RStudio\bin\rstudio.exe` | 否 | RStudio 安装路径 |
+| `MPLUS_PATH` | `C:\Program Files\Mplus\mplus.exe` | 否 | Mplus 安装路径 |
+| `STATA_PATH` | `C:\Program Files\Stata18\StataSE-64.exe` | 否 | Stata 安装路径 |
+
+> 环境变量名与 `config.py` 中字段名一一对应（大小写不敏感）。`.env` 已被 `.gitignore` 排除，不会提交到 git。
+
+## 演示账号
+
+演示账号密码通过环境变量配置（见上表 `DEMO_ADMIN_PASSWORD` / `DEMO_USER_PASSWORD`）：
+
+| 用户名 | 角色 | 密码来源 |
+|--------|------|---------|
+| `admin` | 管理员 | 环境变量 `DEMO_ADMIN_PASSWORD` |
+| `user1` | 普通用户 | 环境变量 `DEMO_USER_PASSWORD` |
+
+> **注意**：
+> - 环境变量留空则对应演示账号**禁用登录**（不创建、无法验证）。
+> - 生产环境建议不启用演示账号，改用 `/auth/register` 注册账号，并由管理员分配数据权限。
+> - 如需启用，在 `.env` 中设置 `DEMO_ADMIN_PASSWORD=你的密码`、`DEMO_USER_PASSWORD=你的密码`。
 
 ## 工作流程
 

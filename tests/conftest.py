@@ -11,6 +11,8 @@ from sqlalchemy.orm import sessionmaker
 # 在导入 app 之前覆盖配置，使用 SQLite 内存数据库 + 临时目录
 os.environ["DATABASE_URL"] = "sqlite:///:memory:"
 os.environ["JWT_SECRET"] = "test-secret-key-for-unit-tests"
+os.environ["DEMO_ADMIN_PASSWORD"] = "admin123"
+os.environ["DEMO_USER_PASSWORD"] = "user123"
 os.environ["FILESERVER_ROOT"] = tempfile.mkdtemp(prefix="stats_test_")
 
 # ---- 创建测试引擎并 monkey-patch database 模块 ----

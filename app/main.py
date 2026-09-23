@@ -7,6 +7,7 @@ from fastapi.staticfiles import StaticFiles
 from app.routers import auth, session, results, admin
 from app.database import Base, engine, SessionLocal
 from app.models import User, Scope, AuditLog
+from app.auth import DEMO_ACCOUNTS, DEMO_USERS
 
 # 创建数据库表（生产环境建议用 Alembic 迁移）
 Base.metadata.create_all(bind=engine)
@@ -29,12 +30,10 @@ def _init_demo_data():
             db.commit()
             db.refresh(scope)
 
-        # 演示账号
-        demo_users = {
-            "admin": ("管理员", "admin"),
-            "user1": ("测试用户1", "user"),
-        }
-        for username, (display_name, role) in demo_users.items():
+        # 演示账号（仅创建已配置密码的账号）
+        for username, (display_name, role) in DEMO_ACCOUNTS.items():
+            if username not in DEMO_USERS:
+                continue  # 未配置密码，跳过创建
             if not db.query(User).filter(User.username == username).first():
                 db.add(User(
                     username=username,

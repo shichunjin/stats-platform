@@ -101,3 +101,23 @@ class AuditLogOut(BaseModel):
     detail: Optional[str] = Field(None, description="操作详情")
     ip_addr: Optional[str] = Field(None, description="来源 IP")
     created_at: Optional[datetime] = Field(None, description="操作时间")
+
+
+# ---- Admin ----
+class ScopeAssignRequest(BaseModel):
+    dept_id: Optional[int] = Field(None, description="所属部门（范围）ID，可为空")
+    scope_ids: List[int] = Field(default_factory=list, description="可访问的项目范围 ID 列表")
+
+
+class UserAdminOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int = Field(..., description="用户 ID")
+    username: str = Field(..., description="用户名")
+    display_name: Optional[str] = Field(None, description="显示名称")
+    role: str = Field(..., description="角色：user=普通用户 / admin=管理员")
+    is_active: bool = Field(..., description="账号是否启用")
+    dept_id: Optional[int] = Field(None, description="所属部门范围 ID")
+    dept: Optional[ScopeOut] = Field(None, description="所属部门信息")
+    scopes: List[ScopeOut] = Field(default_factory=list, description="可访问的数据范围列表")
+    created_at: Optional[datetime] = Field(None, description="注册时间")
