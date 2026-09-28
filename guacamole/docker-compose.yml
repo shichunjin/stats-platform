@@ -8,7 +8,7 @@
 #
 # 首次部署步骤：
 #   1. 生成数据库初始化脚本 initdb.sql：
-#        docker run --rm guacamole/guacamole:1.5.5 /opt/guacamole/bin/initdb.sh --postgresql > initdb.sql
+#        docker run --rm guacamole/guacamole:1.6.0 /opt/guacamole/bin/initdb.sh --postgresql > initdb.sql
 #   2. cp .env.example .env 并填入 POSTGRES_PASSWORD
 #   3. docker compose up -d
 #   4. 默认管理员 guacadmin / guacadmin 登录，创建用户与 RDP 连接
@@ -17,7 +17,7 @@
 services:
   # RDP 后端守护进程（负责实际的 RDP 协议通信）
   guacd:
-    image: guacamole/guacd:1.5.5
+    image: guacamole/guacd:1.6.0
     restart: always
     volumes:
       - ./recordings:/var/log/guacamole/recordings
@@ -37,7 +37,7 @@ services:
 
   # Guacamole Web 前端（浏览器访问入口）
   guacamole:
-    image: guacamole/guacamole:1.5.5
+    image: guacamole/guacamole:1.6.0
     restart: always
     ports:
       - "8080:8080"
