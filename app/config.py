@@ -26,6 +26,8 @@ class Settings(BaseSettings):
     rds_host: str = "8.133.223.251"
     rds_port: int = 3389
     guacamole_url: str = "https://guac.chunjindevelop68.xyz/#/client/"
+    # Guacamole 中通用 RDP 连接的 ID（用户在 Windows 内通过桌面快捷方式启动软件）
+    guacamole_connection_id: str = "1"
 
     # 各软件安装路径 (Windows Server 上)
     rstudio_path: str = r"C:\Program Files\RStudio\bin\rstudio.exe"

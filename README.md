@@ -259,12 +259,37 @@ sudo docker compose logs guacamole   # 查看日志无报错
 
 | 参数名 | 值 | 作用 |
 |--------|-----|------|
-| `security` | `nla` | 网络级认证 |
-| `ignore-cert` | `true` | 忽略证书 |
+| `security` | `tls` | 使用 TLS 安全层（配合 Windows 关闭 NLA） |
+| `ignore-cert` | `true` | 忽略自签名证书 |
 | `disable-copy` | `true` | 禁用剪贴板复制 |
 | `disable-paste` | `true` | 禁用剪贴板粘贴 |
 | `disable-drive` | `true` | 禁用本地驱动器映射 |
 | `disable-printing` | `true` | 禁用打印重定向 |
+
+> ⚠️ **不要填任何 `gateway-*` 参数**（远程桌面网关配置）。直连 Windows 主机场景下若误填 `gateway-hostname` 等参数，Guacamole 会误判为走 RD 网关，导致 `Security negotiation failed (wrong security type?)`。
+
+### RDP 连接排错（Windows Server 2022 必读）
+
+Windows Server 2012+ 已废弃标准 RDP 加密（RC4），实际强制走 TLS；同时 Guacamole 1.5.5 内置 FreeRDP 与 Server 2022 存在兼容性问题（GUACAMOLE-1920）。因此**必须使用 1.6.0 及以上版本**，并按以下组合配置：
+
+**1. Windows 端关闭 NLA、强制 TLS**（管理员 PowerShell）：
+
+```powershell
+$p = "HKLM:\SYSTEM\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp"
+Set-ItemProperty -Path $p -Name "UserAuthentication" -Value 0 -Type DWord   # 0 = 关 NLA
+Set-ItemProperty -Path $p -Name "SecurityLayer"    -Value 1 -Type DWord   # 1 = 强制 TLS
+Restart-Service TermService -Force
+```
+
+**2. Guacamole 连接参数**：`security=tls` + `ignore-cert=true`，且**不填 gateway-\* 参数**。
+
+**常见报错对照**：
+
+| 报错 | 原因 | 解决 |
+|------|------|------|
+| `Authentication failure (invalid credentials?)` | Windows 账号名或密码错误 | 用 `mstsc` 验证凭据；`Get-LocalUser` 确认账户名 |
+| `Security negotiation failed (wrong security type?)` | 误填 `gateway-*` 参数，或安全模式与 Windows 不一致 | 删除 `gateway-*`；统一 `security=tls` + 关 NLA |
+| `SSL/TLS connection failed (untrusted/self-signed certificate?)` | 证书不被信任，或 `SecurityLayer=0` 被 Server 2022 忽略 | 勾选/写入 `ignore-cert=true`；`SecurityLayer` 设为 `1` |
 
 **配置 HTTPS（域名 chunjindevelop68.xyz）**：用 Nginx 反向代理 8080 端口（已提供 `guacamole/nginx-guacamole.conf`）。步骤：
 
@@ -272,25 +297,33 @@ sudo docker compose logs guacamole   # 查看日志无报错
 # ① 安装 Nginx + certbot
 sudo dnf install -y nginx
 sudo dnf install -y python3-pip
-sudo pip3 install certbot certbot-nginx
+sudo pip3 install certbot
 
-# ② 复制配置文件
-sudo cp nginx-guacamole.conf /etc/nginx/conf.d/guacamole.conf
+# ② 停掉 nginx，确保 80 端口空闲（standalone 方式需要占用 80 验证）
+sudo systemctl stop nginx 2>/dev/null || true
 
-# ③ 申请 SSL 证书（自动修改配置）
-sudo certbot --nginx -d guac.chunjindevelop68.xyz
+# ③ 先用 standalone 方式申请证书（只生成证书，不改 nginx）
+#    需确保域名 guac.chunjindevelop68.xyz 已解析到本机公网 IP
+sudo certbot certonly --standalone -d guac.chunjindevelop68.xyz \
+    --agree-tos --non-interactive -m your-email@example.com
 
-# ④ 启动并重载 Nginx
+# ④ 复制配置文件（此时证书已存在，443 配置可正常加载）
+sudo cp guacamole/nginx-guacamole.conf /etc/nginx/conf.d/guacamole.conf
+
+# ⑤ 测试并启动 Nginx
+sudo nginx -t
 sudo systemctl enable --now nginx
-sudo nginx -t && sudo systemctl reload nginx
 ```
+
+> 说明：`nginx-guacamole.conf` 已内置完整的 443 HTTPS server 和证书路径（`/etc/letsencrypt/live/...`），所以必须**先申请证书、再复制配置**，否则 nginx 会因引用不存在的证书而无法启动。不要用 `certbot --nginx`（它会和已写好的 443 配置冲突）。
 
 完成后通过 `https://guac.chunjindevelop68.xyz/guacamole/` 访问。
 
 > 注意：
 > - nginx 配置中 WebSocket 升级（`Upgrade`/`Connection`）是关键，Guacamole 远程桌面画面依赖它，请勿删除。
 > - 若 `pip3 install certbot` 安装的 `certbot` 命令不在 PATH，可用 `python3 -m certbot` 替代。
-> - 阿里云安全组需放行 80 / 443 / 8080 端口。
+> - 阿里云安全组需放行 80 / 443 端口（8080 端口仅在未收紧时用，建议收紧为仅本机访问）。
+> - 证书续期：`sudo certbot renew --quiet` 可加入 crontab 自动续期。
 
 ## 环境配置
 

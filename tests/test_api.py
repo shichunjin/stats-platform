@@ -2,7 +2,6 @@
 import os
 import csv
 import tempfile
-from unittest.mock import patch, MagicMock
 
 import pytest
 
@@ -117,51 +116,41 @@ class TestGetMe:
 class TestSessionLaunch:
     """POST /session/launch/{software} 测试"""
 
-    @patch("app.routers.session.subprocess.Popen")
-    def test_launch_rstudio(self, mock_popen, client, test_user, auth_headers):
+    def test_launch_rstudio(self, client, test_user, auth_headers):
         """启动 RStudio 会话"""
-        mock_popen.return_value = MagicMock()
         resp = client.post("/session/launch/rstudio", headers=auth_headers)
         assert resp.status_code == 200
         data = resp.json()
         assert data["software"] == "rstudio"
         assert data["status"] == "active"
         assert "guac_url" in data
-        assert "rstudio" in data["guac_url"]
+        assert settings.guacamole_connection_id in data["guac_url"]
 
-    @patch("app.routers.session.subprocess.Popen")
-    def test_launch_mplus(self, mock_popen, client, test_user, auth_headers):
+    def test_launch_mplus(self, client, test_user, auth_headers):
         """启动 Mplus 会话"""
-        mock_popen.return_value = MagicMock()
         resp = client.post("/session/launch/mplus", headers=auth_headers)
         assert resp.status_code == 200
         assert resp.json()["software"] == "mplus"
 
-    @patch("app.routers.session.subprocess.Popen")
-    def test_launch_stata(self, mock_popen, client, test_user, auth_headers):
+    def test_launch_stata(self, client, test_user, auth_headers):
         """启动 Stata 会话"""
-        mock_popen.return_value = MagicMock()
         resp = client.post("/session/launch/stata", headers=auth_headers)
         assert resp.status_code == 200
         assert resp.json()["software"] == "stata"
 
-    @patch("app.routers.session.subprocess.Popen")
-    def test_launch_invalid_software(self, mock_popen, client, test_user, auth_headers):
+    def test_launch_invalid_software(self, client, test_user, auth_headers):
         """不支持的软件返回 400"""
         resp = client.post("/session/launch/spss", headers=auth_headers)
         assert resp.status_code == 400
         assert "不支持的软件" in resp.json()["detail"]
 
-    @patch("app.routers.session.subprocess.Popen")
-    def test_launch_without_auth(self, mock_popen, client):
+    def test_launch_without_auth(self, client):
         """未认证返回 401"""
         resp = client.post("/session/launch/rstudio")
         assert resp.status_code == 401
 
-    @patch("app.routers.session.subprocess.Popen")
-    def test_launch_creates_audit_log(self, mock_popen, client, test_user, auth_headers, db_session):
+    def test_launch_creates_audit_log(self, client, test_user, auth_headers, db_session):
         """启动会话创建审计日志"""
-        mock_popen.return_value = MagicMock()
         client.post("/session/launch/rstudio", headers=auth_headers)
         logs = db_session.query(AuditLog).filter(
             AuditLog.action == "session_launch"
@@ -169,10 +158,8 @@ class TestSessionLaunch:
         assert len(logs) >= 1
         assert "rstudio" in logs[0].detail
 
-    @patch("app.routers.session.subprocess.Popen")
-    def test_launch_creates_session_record(self, mock_popen, client, test_user, auth_headers, db_session):
+    def test_launch_creates_session_record(self, client, test_user, auth_headers, db_session):
         """启动会话创建数据库会话记录"""
-        mock_popen.return_value = MagicMock()
         resp = client.post("/session/launch/rstudio", headers=auth_headers)
         session_id = resp.json()["id"]
         record = db_session.query(SessionModel).filter(SessionModel.id == session_id).first()
@@ -453,10 +440,8 @@ class TestAdminPending:
 class TestEndToEnd:
     """端到端完整流程测试"""
 
-    @patch("app.routers.session.subprocess.Popen")
-    def test_full_workflow(self, mock_popen, client, test_user, auth_headers, pending_dir, published_dir, db_session):
+    def test_full_workflow(self, client, test_user, auth_headers, pending_dir, published_dir, db_session):
         """完整流程：登录 → 启动会话 → 保存结果 → 扫描审查 → 下载"""
-        mock_popen.return_value = MagicMock()
 
         # 1. 验证身份
         resp = client.get("/auth/me", headers=auth_headers)
@@ -502,10 +487,8 @@ class TestEndToEnd:
         assert "result_approved" in actions
         assert "result_download" in actions
 
-    @patch("app.routers.session.subprocess.Popen")
-    def test_rejected_workflow(self, mock_popen, client, test_user, auth_headers, pending_dir, db_session):
+    def test_rejected_workflow(self, client, test_user, auth_headers, pending_dir, db_session):
         """被拒绝的流程：保存含敏感数据的文件"""
-        mock_popen.return_value = MagicMock()
 
         # 模拟用户保存含手机号的文件
         csv_path = os.path.join(pending_dir, "sensitive.csv")
