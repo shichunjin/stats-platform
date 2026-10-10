@@ -30,6 +30,16 @@ class Settings(BaseSettings):
     # 业务数据宽表名（create_testdata_table.py 建的表，/data/fetch 从该表读数据）
     testdata_table: str = "test_data"
 
+    # ---- Windows 云主机 SFTP 推送（生成的 Excel 推送到 Windows C:\StatsData） ----
+    sftp_host: str = "8.133.223.251"
+    sftp_port: int = 22
+    sftp_username: str = "Administrator"
+    # 私钥路径（Linux 服务器上，免密登录；~ 会自动展开）
+    sftp_key_path: str = "~/.ssh/stats_windows"
+    sftp_passphrase: str = ""
+    # Windows 上的目标目录（SFTP 路径用正斜杠）
+    windows_data_dir: str = "C:/StatsData"
+
     # 远程桌面
     rds_host: str = "8.133.223.251"
     rds_port: int = 3389

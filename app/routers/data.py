@@ -7,6 +7,7 @@ from app.models import User, DatasetMeta, AuditLog
 from app.auth import get_current_user, require_admin
 from app.config import settings
 from app.dataset import import_csv_to_db, generate_excel_from_table
+from app.transfer import upload_file_to_windows
 
 router = APIRouter(prefix="/data", tags=["数据"])
 
@@ -47,17 +48,18 @@ def import_dataset(
     }
 
 
-@router.post("/fetch", summary="获取数据（生成 Excel 到文件服务器）", description="""
-**从业务宽表 test_data 读取数据并生成 Excel 文件，存放到文件服务器供用户分析**
+@router.post("/fetch", summary="获取数据（生成 Excel 并推送到 Windows 云平台）", description="""
+**从业务宽表 test_data 读取数据生成 Excel，并通过 SFTP 推送到 Windows 云主机 C:\\StatsData**
 
 - 数据来源：`create_testdata_table.py` 建立的业务宽表（默认表名 `test_data`，可用环境变量覆盖）
 - 所有登录用户获取同一份完整数据（数据权限差异暂不切分此数据集）
-- 生成的 `.xlsx` 存放到 `fileserver_root/data/{dataset_name}.xlsx`
-- 用户通过 Windows 平台（RDP）访问该文件进行分析
+- 生成的 `.xlsx` 先落到 `fileserver_root/data/`，再 SFTP 上传到 Windows
+- 用户连接 Windows 平台后，在 **Z: 盘**即可直接打开使用
 
 **错误码**
 - `401`：未认证
 - `404`：业务数据表不存在或没有数据列（需先运行 create_testdata_table.py）
+- `502`：SFTP 推送到 Windows 失败（检查 OpenSSH、安全组 22 端口、私钥配置）
 """)
 def fetch_data(
     user: User = Depends(get_current_user),
@@ -73,10 +75,20 @@ def fetch_data(
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"生成 Excel 失败: {str(e)}")
 
+    # SFTP 推送到 Windows 云主机
+    try:
+        win_path = upload_file_to_windows(out_path)
+    except Exception as e:
+        raise HTTPException(
+            status_code=502,
+            detail=f"Excel 已生成，但推送到 Windows 云平台失败: {str(e)}",
+        )
+
     db.add(AuditLog(
         user_id=user.id,
         action="data_fetch",
-        detail=f"获取数据 {settings.dataset_name}.xlsx: {rows} 行, {columns} 列（来源表 {settings.testdata_table}）",
+        detail=f"获取数据 {settings.dataset_name}.xlsx: {rows} 行, {columns} 列，"
+               f"已推送到 Windows {win_path}",
     ))
     db.commit()
 
@@ -84,5 +96,6 @@ def fetch_data(
         "filename": f"{settings.dataset_name}.xlsx",
         "rows": rows,
         "columns": columns,
-        "path": out_path,
+        "local_path": out_path,
+        "windows_path": win_path,
     }
