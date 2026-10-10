@@ -19,13 +19,18 @@ class Settings(BaseSettings):
     demo_admin_password: str = ""
     demo_user_password: str = ""
 
-    # 文件服务器根路径
-    fileserver_root: str = r"\\fileserver"
+    # 文件服务器根路径（后端可写目录；生产环境改为挂载到 Windows 文件服务器的本地路径）
+    fileserver_root: str = "./fileserver_data"
+
+    # 待导入的原始数据集 CSV 路径
+    dataset_csv_path: str = "testData.csv"
+    # 数据集名称（导入数据库后的标识）
+    dataset_name: str = "testData"
 
     # 远程桌面
     rds_host: str = "8.133.223.251"
     rds_port: int = 3389
-    guacamole_url: str = "https://guac.chunjindevelop68.xyz/#/client/"
+    guacamole_url: str = "http://47.117.171.130:8080/guacamole/#/client/"
     # Guacamole 中通用 RDP 连接的 ID（用户在 Windows 内通过桌面快捷方式启动软件）
     guacamole_connection_id: str = "1"
 

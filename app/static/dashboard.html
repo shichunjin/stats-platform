@@ -112,6 +112,19 @@
         .btn:hover { background: #5561e0; }
         .btn-sm { padding: 4px 10px; font-size: 12px; }
 
+        .btn-connect {
+            padding: 12px 28px;
+            font-size: 15px;
+            font-weight: 600;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        }
+        .btn-connect:hover { opacity: 0.92; }
+
+        .btn-approve { background: #16a34a; }
+        .btn-approve:hover { background: #15803d; }
+        .btn-reject { background: #dc2626; }
+        .btn-reject:hover { background: #b91c1c; }
+
         .actions { display: flex; gap: 8px; align-items: center; }
         .links { display: flex; gap: 16px; align-items: center; font-size: 13px; }
         .links a { color: rgba(255, 255, 255, 0.9); text-decoration: none; }
@@ -173,32 +186,26 @@
 
     <div class="container">
         <div class="section">
-            <h2>启动统计软件</h2>
-            <div class="grid">
-                <div class="software-card" onclick="launchSoftware('rstudio')">
-                    <div class="icon">📊</div>
-                    <div class="name">RStudio</div>
-                    <div class="desc">R 语言集成开发环境</div>
-                </div>
-                <div class="software-card" onclick="launchSoftware('mplus')">
-                    <div class="icon">📈</div>
-                    <div class="name">Mplus Editor</div>
-                    <div class="desc">结构方程模型分析</div>
-                </div>
-                <div class="software-card" onclick="launchSoftware('stata')">
-                    <div class="icon">📋</div>
-                    <div class="name">StataSE 18</div>
-                    <div class="desc">统计与经济分析</div>
-                </div>
+            <h2>Windows 分析平台</h2>
+            <div style="display:flex;gap:14px;align-items:center;flex-wrap:wrap;">
+                <button class="btn btn-connect" onclick="connectWindows()">连接 Windows 分析平台</button>
+                <button class="btn" onclick="fetchData()">获取数据</button>
             </div>
+            <p style="font-size:12px;color:#6b7280;margin:12px 0 0;">
+                点击「连接」通过浏览器进入 Windows 分析环境，按登录用户身份做数据控制；
+                点击「获取数据」把数据库中的数据集生成 Excel 存放到 Windows 平台供分析使用。
+            </p>
             <div id="active-sessions" style="margin-top: 16px;"></div>
         </div>
 
         <div class="section">
             <h2>我的结果文件
-                <button class="btn btn-sm" style="float: right;" onclick="scanResults()">扫描审查新文件</button>
+                <button class="btn btn-sm" style="float: right;" onclick="requestExport()">申请导出结果</button>
             </h2>
-            <h3 style="font-size: 14px; color: #6b7280; margin: 12px 0 8px;">待审查</h3>
+            <p style="font-size:12px;color:#6b7280;margin:0 0 12px;">
+                普通用户不能直接导出数据，只能申请导出结果，经管理员审核通过后才会显示在「已发布」列表供下载。
+            </p>
+            <h3 style="font-size: 14px; color: #6b7280; margin: 12px 0 8px;">导出申请</h3>
             <table id="pending-table">
                 <thead>
                     <tr>
@@ -256,6 +263,22 @@
                 <label style="display:block;font-size:13px;margin-bottom:6px;">可访问项目范围</label>
                 <div id="scope-project-checkboxes" style="display:flex;flex-wrap:wrap;gap:10px;"></div>
             </div>
+
+            <h2 style="margin-top:24px;">待审核的导出申请</h2>
+            <table>
+                <thead>
+                    <tr>
+                        <th>文件名</th>
+                        <th>用户ID</th>
+                        <th>类型</th>
+                        <th>申请时间</th>
+                        <th>操作</th>
+                    </tr>
+                </thead>
+                <tbody id="pending-review-body">
+                    <tr><td colspan="5" class="empty">加载中...</td></tr>
+                </tbody>
+            </table>
 
             <h2 style="margin-top:24px;">审计日志</h2>
             <table>
@@ -317,25 +340,45 @@
                     loadAudit();
                     loadUsers();
                     loadScopes();
+                    loadPendingExports();
                 }
             } catch (e) {
                 logout();
             }
         }
 
-        async function launchSoftware(software) {
+        async function connectWindows() {
             try {
-                const resp = await fetch(`${API_BASE}/session/launch/${software}`, {
+                const resp = await fetch(`${API_BASE}/session/connect`, {
                     method: 'POST',
                     headers: authHeaders(),
                 });
                 const data = await resp.json();
                 if (!resp.ok) {
-                    showToast('error', data.detail || '启动失败');
+                    showToast('error', data.detail || '连接失败');
                     return;
                 }
-                showToast('success', `${software} 会话已启动`);
+                showToast('success', '已建立 Windows 分析会话');
                 renderActiveSession(data);
+                // 直接打开连接
+                window.open(data.guac_url, '_blank');
+            } catch (err) {
+                showToast('error', '网络错误：' + err.message);
+            }
+        }
+
+        async function fetchData() {
+            try {
+                const resp = await fetch(`${API_BASE}/data/fetch`, {
+                    method: 'POST',
+                    headers: authHeaders(),
+                });
+                const data = await resp.json();
+                if (!resp.ok) {
+                    showToast('error', data.detail || '获取数据失败');
+                    return;
+                }
+                showToast('success', `数据已生成：${data.filename}（${data.rows} 行 × ${data.columns} 列）`);
             } catch (err) {
                 showToast('error', '网络错误：' + err.message);
             }
@@ -347,7 +390,7 @@
             item.className = 'session-item';
             item.innerHTML = `
                 <div>
-                    <div class="name">${session.software}</div>
+                    <div class="name">Windows 分析平台</div>
                     <div class="meta">启动于 ${formatDate(session.launched_at)}</div>
                 </div>
                 <div class="actions">
@@ -403,20 +446,22 @@
             }
         }
 
-        async function scanResults() {
+        async function requestExport() {
             try {
-                const resp = await fetch(API_BASE + '/results/scan', {
+                const resp = await fetch(API_BASE + '/results/request-export', {
                     method: 'POST',
                     headers: authHeaders(),
                 });
                 const data = await resp.json();
                 if (!resp.ok) {
-                    showToast('error', data.detail || '扫描失败');
+                    showToast('error', data.detail || '申请失败');
                     return;
                 }
-                const approved = data.results.filter(r => r.status === 'approved').length;
-                const rejected = data.results.filter(r => r.status === 'rejected').length;
-                showToast('success', `扫描 ${data.scanned} 个文件：通过 ${approved} / 拒绝 ${rejected}`);
+                if (data.registered === 0) {
+                    showToast('error', '没有新的结果文件可申请（请先在 Windows 平台保存结果到待导出目录）');
+                } else {
+                    showToast('success', `已提交 ${data.registered} 个导出申请，等待管理员审核`);
+                }
                 loadResults();
             } catch (err) {
                 showToast('error', '网络错误：' + err.message);
@@ -466,6 +511,77 @@
                 }
             } catch (e) {
                 // 非管理员忽略
+            }
+        }
+
+        // ---- 待审核导出申请（管理员） ----
+        async function loadPendingExports() {
+            try {
+                const resp = await fetch(API_BASE + '/admin/pending', { headers: authHeaders() });
+                const data = await resp.json();
+                const body = document.getElementById('pending-review-body');
+                body.innerHTML = '';
+                if (!resp.ok) return;
+                if (!data || data.length === 0) {
+                    body.innerHTML = '<tr><td colspan="5" class="empty">暂无待审核申请</td></tr>';
+                } else {
+                    data.forEach(p => {
+                        const tr = document.createElement('tr');
+                        tr.innerHTML = `
+                            <td>${p.file_name}</td>
+                            <td>${p.user_id}</td>
+                            <td>${p.file_type || '-'}</td>
+                            <td>${formatDate(p.created_at)}</td>
+                            <td class="actions">
+                                <button class="btn btn-sm btn-approve" onclick="approveExport(${p.id})">通过</button>
+                                <button class="btn btn-sm btn-reject" onclick="rejectExport(${p.id})">拒绝</button>
+                            </td>
+                        `;
+                        body.appendChild(tr);
+                    });
+                }
+            } catch (e) { /* 非管理员忽略 */ }
+        }
+
+        async function approveExport(id) {
+            try {
+                const resp = await fetch(`${API_BASE}/admin/pending/${id}/approve`, {
+                    method: 'POST',
+                    headers: authHeaders(),
+                    body: JSON.stringify({ reason: '审核通过' }),
+                });
+                const data = await resp.json();
+                if (!resp.ok) {
+                    showToast('error', data.detail || '操作失败');
+                    return;
+                }
+                showToast('success', `已通过：${data.file_name}`);
+                loadPendingExports();
+                loadAudit();
+            } catch (err) {
+                showToast('error', '网络错误：' + err.message);
+            }
+        }
+
+        async function rejectExport(id) {
+            const reason = prompt('请输入拒绝原因：', '');
+            if (reason === null) return;
+            try {
+                const resp = await fetch(`${API_BASE}/admin/pending/${id}/reject`, {
+                    method: 'POST',
+                    headers: authHeaders(),
+                    body: JSON.stringify({ reason: reason || '审核拒绝' }),
+                });
+                const data = await resp.json();
+                if (!resp.ok) {
+                    showToast('error', data.detail || '操作失败');
+                    return;
+                }
+                showToast('success', `已拒绝：${data.file_name}`);
+                loadPendingExports();
+                loadAudit();
+            } catch (err) {
+                showToast('error', '网络错误：' + err.message);
             }
         }
 

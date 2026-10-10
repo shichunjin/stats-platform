@@ -1,4 +1,8 @@
-"""结果路由: GET /results/mine, POST /results/{id}/download, POST /results/scan"""
+"""结果路由: 申请导出 / 我的结果 / 下载
+
+普通用户不能直接导出 Windows 平台内的数据，只能「申请导出结果」。
+申请后需管理员人工审核，审核通过后结果才出现在「已发布」列表供下载。
+"""
 import os
 import shutil
 from fastapi import APIRouter, Depends, HTTPException
@@ -8,7 +12,7 @@ from app.database import get_db
 from app.models import User, PendingFile, ExportResult, AuditLog
 from app.auth import get_current_user
 from app.config import settings
-from app.review import review_result, scan_pending_directory
+from app.review import scan_pending_directory
 from app.schemas import PendingFileOut, ExportResultOut
 
 router = APIRouter(prefix="/results", tags=["结果"])
@@ -16,10 +20,6 @@ router = APIRouter(prefix="/results", tags=["结果"])
 
 def _user_pending_dir(user_id: int) -> str:
     return os.path.join(settings.fileserver_root, "pending", str(user_id))
-
-
-def _user_workspace_dir(user_id: int) -> str:
-    return os.path.join(settings.fileserver_root, "workspace", str(user_id))
 
 
 def _published_dir(result_id: int) -> str:
@@ -31,12 +31,8 @@ def _published_dir(result_id: int) -> str:
 @router.get("/mine", summary="获取我的结果列表", description="""
 **获取当前用户的结果列表**
 
-返回两部分数据：
-- `pending`：待审查的文件列表
-- `published`：已通过审查可下载的结果列表
-
-**权限**
-- 只能查看自己的结果，不能查看其他用户的
+- `pending`：已提交的导出申请（含待审核/已通过/已拒绝）
+- `published`：已通过审核、可下载的结果
 
 **错误码**
 - `401`：未认证
@@ -45,7 +41,6 @@ def get_my_results(
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    """获取我的待审查文件和已发布结果"""
     pending = db.query(PendingFile).filter(
         PendingFile.user_id == user.id
     ).order_by(PendingFile.created_at.desc()).all()
@@ -60,40 +55,27 @@ def get_my_results(
     }
 
 
-@router.post("/scan", summary="扫描审查结果文件", description="""
-**扫描 pending 目录并自动审查结果文件**
+@router.post("/request-export", summary="申请导出结果", description="""
+**申请导出结果（普通用户）**
 
-**审查规则**
-- **文件类型白名单**：`.csv` / `.png` / `.jpg` / `.out` / `.txt` / `.log` / `.pdf`
-- **CSV 字段白名单**：只允许聚合/统计结果列名（如 `mean` / `std` / `estimate` / `p_value` 等）
-- **敏感字段拒绝**：列名命中 `id` / `name` / `phone` / `email` 等敏感字段直接拒绝
-- **敏感数据正则**：单元格内容匹配手机号、身份证号、邮箱等正则即拒绝
-- **行数上限**：CSV 数据行数超过 200 行拒绝（疑似导出原始明细数据）
-- **列数上限**：CSV 列数超过 30 列拒绝（疑似导出原始宽表）
+扫描当前用户 pending 目录下的新文件，登记为「待审核」的导出申请。
+**不会自动审查**，需管理员在 `/admin/pending` 中人工审核。
 
-**业务流程**
-1. 扫描用户 pending 目录下的所有文件
-2. 对未记录的新文件执行自动审查
-3. 通过审查的文件复制到 published 目录，创建可下载的导出记录
-4. 未通过的文件标记为 rejected
-5. 所有操作记录审计日志
+审核通过后，结果会复制到 published 目录并出现在「已发布」列表。
 
 **错误码**
 - `401`：未认证
 """)
-def scan_pending(
+def request_export(
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    """扫描 pending 目录，审查新文件"""
     pending_dir = _user_pending_dir(user.id)
     files = scan_pending_directory(pending_dir)
 
-    results = []
-    scanned = 0
+    registered = []
     for fpath in files:
         fname = os.path.basename(fpath)
-        # 检查是否已记录（任何状态都已记录的文件都跳过）
         existing = db.query(PendingFile).filter(
             PendingFile.user_id == user.id,
             PendingFile.file_name == fname,
@@ -101,7 +83,6 @@ def scan_pending(
         if existing:
             continue
 
-        scanned += 1
         _, ext = os.path.splitext(fname)
         pf = PendingFile(
             user_id=user.id,
@@ -112,64 +93,31 @@ def scan_pending(
             status="pending",
         )
         db.add(pf)
-        db.commit()
-        db.refresh(pf)
-
-        # 执行审查
-        ok, reason = review_result(fpath, user)
-        pf.status = "approved" if ok else "rejected"
-        pf.review_reason = reason
-        pf.reviewed_by = user.id  # 自动审查
-        db.commit()
-
-        if ok:
-            # 复制到 published 目录
-            pub_dir = _published_dir(pf.id)
-            pub_path = os.path.join(pub_dir, fname)
-            shutil.copy2(fpath, pub_path)
-
-            exp = ExportResult(
-                user_id=user.id,
-                pending_file_id=pf.id,
-                result_name=fname,
-                file_path=pub_path,
-                file_size=pf.file_size,
-            )
-            db.add(exp)
-            db.add(AuditLog(
-                user_id=user.id,
-                action="result_approved",
-                detail=f"文件 {fname} 审查通过: {reason}",
-            ))
-        else:
-            db.add(AuditLog(
-                user_id=user.id,
-                action="result_rejected",
-                detail=f"文件 {fname} 审查失败: {reason}",
-            ))
-        db.commit()
-
-        results.append({
+        db.flush()
+        registered.append({
+            "id": pf.id,
             "file_name": fname,
-            "status": pf.status,
-            "reason": reason,
+            "status": "pending",
         })
 
-    return {"scanned": scanned, "results": results}
+    if registered:
+        db.add(AuditLog(
+            user_id=user.id,
+            action="export_requested",
+            detail=f"申请导出 {len(registered)} 个文件: {', '.join(r['file_name'] for r in registered)}",
+        ))
+
+    db.commit()
+
+    return {"registered": len(registered), "files": registered}
 
 
 @router.post("/{result_id}/download", summary="下载已发布结果", description="""
-**下载已通过审查的结果文件**
+**下载已通过审核的结果文件**
 
 **权限**
-- 只能下载自己的结果，不能下载其他用户的
-- 文件必须已通过审查并发布
-
-**业务流程**
-1. 校验用户对结果的所有权
-2. 递增下载次数
-3. 记录审计日志
-4. 返回文件流
+- 只能下载自己的结果
+- 文件必须已通过管理员审核并发布
 
 **错误码**
 - `401`：未认证
@@ -180,7 +128,6 @@ def download_result(
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    """下载已发布的结果文件"""
     exp = db.query(ExportResult).filter(
         ExportResult.id == result_id,
         ExportResult.user_id == user.id,

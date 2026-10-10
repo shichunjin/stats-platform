@@ -109,6 +109,10 @@ class ScopeAssignRequest(BaseModel):
     scope_ids: List[int] = Field(default_factory=list, description="可访问的项目范围 ID 列表")
 
 
+class ExportReviewRequest(BaseModel):
+    reason: Optional[str] = Field(None, description="审核意见（拒绝时建议填写原因）")
+
+
 class UserAdminOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 

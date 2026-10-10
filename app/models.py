@@ -2,7 +2,7 @@
 from datetime import datetime
 from sqlalchemy import (
     Column, Integer, String, Text, BigInteger, Boolean, DateTime, ForeignKey,
-    Table
+    Table, JSON
 )
 from sqlalchemy.orm import relationship
 from app.database import Base
@@ -96,3 +96,24 @@ class AuditLog(Base):
     detail = Column(Text)
     ip_addr = Column(String(64))
     created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class DatasetMeta(Base):
+    """数据集元数据（列名、行数等）"""
+    __tablename__ = "dataset_meta"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    name = Column(String(128), unique=True, nullable=False)
+    column_names = Column(JSON)          # 列名列表（保序）
+    total_rows = Column(Integer, default=0)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class DatasetRow(Base):
+    """数据集行数据（每行以 JSON 字典存储，键为列名）"""
+    __tablename__ = "dataset_rows"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    dataset_id = Column(Integer, ForeignKey("dataset_meta.id"), nullable=False)
+    row_index = Column(Integer, nullable=False)
+    data = Column(JSON)                  # {列名: 值}
+
+    dataset = relationship("DatasetMeta")

@@ -113,58 +113,39 @@ class TestGetMe:
 # 测试：会话路由 /session
 # ============================================================
 
-class TestSessionLaunch:
-    """POST /session/launch/{software} 测试"""
+class TestSessionConnect:
+    """POST /session/connect 测试"""
 
-    def test_launch_rstudio(self, client, test_user, auth_headers):
-        """启动 RStudio 会话"""
-        resp = client.post("/session/launch/rstudio", headers=auth_headers)
+    def test_connect(self, client, test_user, auth_headers):
+        """连接 Windows 分析平台"""
+        resp = client.post("/session/connect", headers=auth_headers)
         assert resp.status_code == 200
         data = resp.json()
-        assert data["software"] == "rstudio"
+        assert data["software"] == "windows"
         assert data["status"] == "active"
         assert "guac_url" in data
         assert settings.guacamole_connection_id in data["guac_url"]
 
-    def test_launch_mplus(self, client, test_user, auth_headers):
-        """启动 Mplus 会话"""
-        resp = client.post("/session/launch/mplus", headers=auth_headers)
-        assert resp.status_code == 200
-        assert resp.json()["software"] == "mplus"
-
-    def test_launch_stata(self, client, test_user, auth_headers):
-        """启动 Stata 会话"""
-        resp = client.post("/session/launch/stata", headers=auth_headers)
-        assert resp.status_code == 200
-        assert resp.json()["software"] == "stata"
-
-    def test_launch_invalid_software(self, client, test_user, auth_headers):
-        """不支持的软件返回 400"""
-        resp = client.post("/session/launch/spss", headers=auth_headers)
-        assert resp.status_code == 400
-        assert "不支持的软件" in resp.json()["detail"]
-
-    def test_launch_without_auth(self, client):
+    def test_connect_without_auth(self, client):
         """未认证返回 401"""
-        resp = client.post("/session/launch/rstudio")
+        resp = client.post("/session/connect")
         assert resp.status_code == 401
 
-    def test_launch_creates_audit_log(self, client, test_user, auth_headers, db_session):
-        """启动会话创建审计日志"""
-        client.post("/session/launch/rstudio", headers=auth_headers)
+    def test_connect_creates_audit_log(self, client, test_user, auth_headers, db_session):
+        """连接创建审计日志"""
+        client.post("/session/connect", headers=auth_headers)
         logs = db_session.query(AuditLog).filter(
-            AuditLog.action == "session_launch"
+            AuditLog.action == "session_connect"
         ).all()
         assert len(logs) >= 1
-        assert "rstudio" in logs[0].detail
 
-    def test_launch_creates_session_record(self, client, test_user, auth_headers, db_session):
-        """启动会话创建数据库会话记录"""
-        resp = client.post("/session/launch/rstudio", headers=auth_headers)
+    def test_connect_creates_session_record(self, client, test_user, auth_headers, db_session):
+        """连接创建数据库会话记录"""
+        resp = client.post("/session/connect", headers=auth_headers)
         session_id = resp.json()["id"]
         record = db_session.query(SessionModel).filter(SessionModel.id == session_id).first()
         assert record is not None
-        assert record.software == "rstudio"
+        assert record.software == "windows"
 
 
 # ============================================================
@@ -207,131 +188,130 @@ class TestResultsMine:
         assert data["pending"] == []
 
 
-class TestResultsScan:
-    """POST /results/scan 测试"""
+class TestResultsRequestExport:
+    """POST /results/request-export 测试"""
 
-    def test_scan_empty_dir(self, client, test_user, auth_headers, pending_dir):
+    def test_request_empty_dir(self, client, test_user, auth_headers, pending_dir):
         """空 pending 目录"""
-        resp = client.post("/results/scan", headers=auth_headers)
+        resp = client.post("/results/request-export", headers=auth_headers)
         assert resp.status_code == 200
-        data = resp.json()
-        assert data["scanned"] == 0
-        assert data["results"] == []
+        assert resp.json()["registered"] == 0
 
-    def test_scan_approved_csv(self, client, test_user, auth_headers, pending_dir, published_dir):
-        """扫描通过的 CSV 文件"""
-        csv_path = os.path.join(pending_dir, "summary.csv")
-        with open(csv_path, "w", encoding="utf-8-sig", newline="") as f:
-            writer = csv.writer(f)
-            writer.writerow(["variable", "mean", "std", "n"])
-            writer.writerow(["age", "35.2", "10.1", "100"])
-
-        resp = client.post("/results/scan", headers=auth_headers)
-        assert resp.status_code == 200
-        data = resp.json()
-        assert data["scanned"] == 1
-        assert data["results"][0]["status"] == "approved"
-
-    def test_scan_rejected_csv_sensitive(self, client, test_user, auth_headers, pending_dir):
-        """扫描含敏感字段的 CSV"""
-        csv_path = os.path.join(pending_dir, "bad.csv")
-        with open(csv_path, "w", encoding="utf-8-sig", newline="") as f:
-            writer = csv.writer(f)
-            writer.writerow(["name", "phone"])
-            writer.writerow(["张三", "13812345678"])
-
-        resp = client.post("/results/scan", headers=auth_headers)
-        data = resp.json()
-        assert data["scanned"] == 1
-        assert data["results"][0]["status"] == "rejected"
-
-    def test_scan_rejected_csv_too_many_rows(self, client, test_user, auth_headers, pending_dir):
-        """扫描行数超限的 CSV"""
-        csv_path = os.path.join(pending_dir, "large.csv")
-        with open(csv_path, "w", encoding="utf-8-sig", newline="") as f:
-            writer = csv.writer(f)
-            writer.writerow(["mean", "std"])
-            for _ in range(250):
-                writer.writerow(["1.0", "2.0"])
-
-        resp = client.post("/results/scan", headers=auth_headers)
-        data = resp.json()
-        assert data["results"][0]["status"] == "rejected"
-
-    def test_scan_creates_pending_file_record(self, client, test_user, auth_headers, pending_dir, db_session):
-        """扫描后创建 pending_files 记录"""
+    def test_request_registers_pending(self, client, test_user, auth_headers, pending_dir, db_session):
+        """登记待审核文件，状态为 pending"""
         csv_path = os.path.join(pending_dir, "result.csv")
         with open(csv_path, "w", encoding="utf-8-sig", newline="") as f:
-            writer = csv.writer(f)
-            writer.writerow(["mean", "std"])
-            writer.writerow(["1.0", "2.0"])
+            f.write("mean\n1.0\n")
 
-        client.post("/results/scan", headers=auth_headers)
+        resp = client.post("/results/request-export", headers=auth_headers)
+        assert resp.status_code == 200
+        assert resp.json()["registered"] == 1
+
         records = db_session.query(PendingFile).filter(
             PendingFile.user_id == test_user.id
         ).all()
         assert len(records) == 1
         assert records[0].file_name == "result.csv"
+        assert records[0].status == "pending"
 
-    def test_scan_approved_creates_export_result(self, client, test_user, auth_headers, pending_dir, published_dir, db_session):
-        """审查通过后创建 export_results 记录"""
-        csv_path = os.path.join(pending_dir, "good.csv")
+    def test_request_creates_audit_log(self, client, test_user, auth_headers, pending_dir, db_session):
+        """申请导出创建审计日志"""
+        csv_path = os.path.join(pending_dir, "audit.csv")
         with open(csv_path, "w", encoding="utf-8-sig", newline="") as f:
-            writer = csv.writer(f)
-            writer.writerow(["mean", "std"])
-            writer.writerow(["1.0", "2.0"])
+            f.write("mean\n1.0\n")
 
-        client.post("/results/scan", headers=auth_headers)
-        exports = db_session.query(ExportResult).filter(
-            ExportResult.user_id == test_user.id
-        ).all()
-        assert len(exports) == 1
-        assert exports[0].result_name == "good.csv"
-        assert os.path.exists(exports[0].file_path)
-
-    def test_scan_creates_audit_log(self, client, test_user, auth_headers, pending_dir, db_session):
-        """扫描创建审计日志"""
-        csv_path = os.path.join(pending_dir, "audit_test.csv")
-        with open(csv_path, "w", encoding="utf-8-sig", newline="") as f:
-            writer = csv.writer(f)
-            writer.writerow(["mean", "std"])
-            writer.writerow(["1.0", "2.0"])
-
-        client.post("/results/scan", headers=auth_headers)
-        logs = db_session.query(AuditLog).filter(
-            AuditLog.action == "result_approved"
-        ).all()
+        client.post("/results/request-export", headers=auth_headers)
+        logs = db_session.query(AuditLog).filter(AuditLog.action == "export_requested").all()
         assert len(logs) >= 1
 
-    def test_scan_skips_already_pending(self, client, test_user, auth_headers, pending_dir, db_session):
-        """已记录的 pending 文件不重复扫描"""
+    def test_request_skips_already_registered(self, client, test_user, auth_headers, pending_dir):
+        """已登记的文件不重复申请"""
         csv_path = os.path.join(pending_dir, "dup.csv")
         with open(csv_path, "w", encoding="utf-8-sig", newline="") as f:
             f.write("mean\n1.0\n")
 
-        # 第一次扫描
-        client.post("/results/scan", headers=auth_headers)
-        # 第二次扫描 — 应跳过
-        resp = client.post("/results/scan", headers=auth_headers)
-        assert resp.json()["scanned"] == 0
+        client.post("/results/request-export", headers=auth_headers)
+        resp = client.post("/results/request-export", headers=auth_headers)
+        assert resp.json()["registered"] == 0
+
+    def test_request_without_auth(self, client):
+        """未认证返回 401"""
+        resp = client.post("/results/request-export")
+        assert resp.status_code == 401
+
+
+class TestAdminExportReview:
+    """管理员审核导出申请测试"""
+
+    def _submit(self, client, auth_headers, pending_dir, name="result.csv"):
+        """用户提交一个导出申请，返回 pending 记录 id"""
+        csv_path = os.path.join(pending_dir, name)
+        with open(csv_path, "w", encoding="utf-8-sig", newline="") as f:
+            f.write("mean,std\n1.0,2.0\n")
+        client.post("/results/request-export", headers=auth_headers)
+        resp = client.get("/results/mine", headers=auth_headers)
+        return resp.json()["pending"][0]["id"]
+
+    def test_approve(self, client, test_user, test_admin, auth_headers, admin_headers, pending_dir, db_session):
+        """审核通过创建导出结果"""
+        pid = self._submit(client, auth_headers, pending_dir)
+
+        resp = client.post(f"/admin/pending/{pid}/approve", headers=admin_headers, json={"reason": "通过"})
+        assert resp.status_code == 200
+        assert resp.json()["status"] == "approved"
+
+        exports = db_session.query(ExportResult).filter(ExportResult.user_id == test_user.id).all()
+        assert len(exports) == 1
+        assert os.path.exists(exports[0].file_path)
+
+    def test_reject(self, client, test_user, test_admin, auth_headers, admin_headers, pending_dir, db_session):
+        """审核拒绝，不创建导出结果"""
+        pid = self._submit(client, auth_headers, pending_dir)
+
+        resp = client.post(f"/admin/pending/{pid}/reject", headers=admin_headers, json={"reason": "含敏感数据"})
+        assert resp.status_code == 200
+        assert resp.json()["status"] == "rejected"
+
+        exports = db_session.query(ExportResult).filter(ExportResult.user_id == test_user.id).all()
+        assert len(exports) == 0
+
+    def test_approve_requires_admin(self, client, test_user, auth_headers, pending_dir):
+        """普通用户不能审批"""
+        pid = self._submit(client, auth_headers, pending_dir)
+        resp = client.post(f"/admin/pending/{pid}/approve", headers=auth_headers, json={})
+        assert resp.status_code == 403
+
+    def test_approve_nonexistent(self, client, test_admin, admin_headers):
+        """审批不存在的申请返回 404"""
+        resp = client.post("/admin/pending/9999/approve", headers=admin_headers, json={})
+        assert resp.status_code == 404
+
+    def test_pending_list_only_pending(self, client, test_user, test_admin, auth_headers, admin_headers, pending_dir):
+        """管理员 pending 列表只含待审核项"""
+        pid = self._submit(client, auth_headers, pending_dir)
+        # 通过后不应再出现在待审核列表
+        client.post(f"/admin/pending/{pid}/approve", headers=admin_headers, json={})
+        resp = client.get("/admin/pending", headers=admin_headers)
+        assert resp.status_code == 200
+        assert all(p["status"] == "pending" for p in resp.json())
 
 
 class TestResultsDownload:
     """POST /results/{id}/download 测试"""
 
-    def test_download_success(self, client, test_user, auth_headers, pending_dir, published_dir):
-        """下载已发布结果"""
-        # 先创建并通过审查
+    def _approved_result_id(self, client, auth_headers, admin_headers, pending_dir):
+        """提交申请并经管理员审核通过，返回可下载的结果 id"""
         csv_path = os.path.join(pending_dir, "downloadable.csv")
         with open(csv_path, "w", encoding="utf-8-sig", newline="") as f:
             f.write("mean\n1.0\n")
+        client.post("/results/request-export", headers=auth_headers)
+        pid = client.get("/results/mine", headers=auth_headers).json()["pending"][0]["id"]
+        client.post(f"/admin/pending/{pid}/approve", headers=admin_headers, json={})
+        return client.get("/results/mine", headers=auth_headers).json()["published"][0]["id"]
 
-        client.post("/results/scan", headers=auth_headers)
-        resp = client.get("/results/mine", headers=auth_headers)
-        published = resp.json()["published"]
-        assert len(published) == 1
-
-        result_id = published[0]["id"]
+    def test_download_success(self, client, test_user, test_admin, auth_headers, admin_headers, pending_dir):
+        """下载已发布结果"""
+        result_id = self._approved_result_id(client, auth_headers, admin_headers, pending_dir)
         dl_resp = client.post(f"/results/{result_id}/download", headers=auth_headers)
         assert dl_resp.status_code == 200
         assert dl_resp.headers["content-type"] == "application/octet-stream"
@@ -341,29 +321,18 @@ class TestResultsDownload:
         resp = client.post("/results/9999/download", headers=auth_headers)
         assert resp.status_code == 404
 
-    def test_download_increases_count(self, client, test_user, auth_headers, pending_dir, published_dir, db_session):
+    def test_download_increases_count(self, client, test_user, test_admin, auth_headers, admin_headers, pending_dir, db_session):
         """下载次数递增"""
-        csv_path = os.path.join(pending_dir, "counter.csv")
-        with open(csv_path, "w", encoding="utf-8-sig", newline="") as f:
-            f.write("mean\n1.0\n")
-
-        client.post("/results/scan", headers=auth_headers)
-        result_id = client.get("/results/mine", headers=auth_headers).json()["published"][0]["id"]
-
+        result_id = self._approved_result_id(client, auth_headers, admin_headers, pending_dir)
         client.post(f"/results/{result_id}/download", headers=auth_headers)
         client.post(f"/results/{result_id}/download", headers=auth_headers)
 
         exp = db_session.query(ExportResult).filter(ExportResult.id == result_id).first()
         assert exp.download_count == 2
 
-    def test_download_creates_audit_log(self, client, test_user, auth_headers, pending_dir, published_dir, db_session):
+    def test_download_creates_audit_log(self, client, test_user, test_admin, auth_headers, admin_headers, pending_dir, db_session):
         """下载创建审计日志"""
-        csv_path = os.path.join(pending_dir, "dl_audit.csv")
-        with open(csv_path, "w", encoding="utf-8-sig", newline="") as f:
-            f.write("mean\n1.0\n")
-
-        client.post("/results/scan", headers=auth_headers)
-        result_id = client.get("/results/mine", headers=auth_headers).json()["published"][0]["id"]
+        result_id = self._approved_result_id(client, auth_headers, admin_headers, pending_dir)
         client.post(f"/results/{result_id}/download", headers=auth_headers)
 
         logs = db_session.query(AuditLog).filter(AuditLog.action == "result_download").all()
@@ -440,16 +409,16 @@ class TestAdminPending:
 class TestEndToEnd:
     """端到端完整流程测试"""
 
-    def test_full_workflow(self, client, test_user, auth_headers, pending_dir, published_dir, db_session):
-        """完整流程：登录 → 启动会话 → 保存结果 → 扫描审查 → 下载"""
+    def test_full_workflow(self, client, test_user, test_admin, auth_headers, admin_headers, pending_dir, published_dir, db_session):
+        """完整流程：连接 → 申请导出 → 管理员审核通过 → 下载"""
 
         # 1. 验证身份
         resp = client.get("/auth/me", headers=auth_headers)
         assert resp.status_code == 200
         assert resp.json()["username"] == "user1"
 
-        # 2. 启动 RStudio 会话
-        resp = client.post("/session/launch/rstudio", headers=auth_headers)
+        # 2. 连接 Windows 分析平台
+        resp = client.post("/session/connect", headers=auth_headers)
         assert resp.status_code == 200
         assert "guac_url" in resp.json()
 
@@ -461,45 +430,54 @@ class TestEndToEnd:
             writer.writerow(["x1", "0.85", "0.05", "0.001"])
             writer.writerow(["x2", "-0.3", "0.1", "0.005"])
 
-        # 4. 扫描审查
-        resp = client.post("/results/scan", headers=auth_headers)
+        # 4. 申请导出
+        resp = client.post("/results/request-export", headers=auth_headers)
         assert resp.status_code == 200
-        scan_data = resp.json()
-        assert scan_data["scanned"] == 1
-        assert scan_data["results"][0]["status"] == "approved"
+        assert resp.json()["registered"] == 1
 
-        # 5. 查看我的结果
+        # 5. 管理员审核通过
+        pending = client.get("/results/mine", headers=auth_headers).json()["pending"]
+        pid = pending[0]["id"]
+        resp = client.post(f"/admin/pending/{pid}/approve", headers=admin_headers, json={"reason": "通过"})
+        assert resp.status_code == 200
+
+        # 6. 查看我的结果（已发布）
         resp = client.get("/results/mine", headers=auth_headers)
         data = resp.json()
         assert len(data["published"]) == 1
         assert data["published"][0]["result_name"] == "final_results.csv"
         result_id = data["published"][0]["id"]
 
-        # 6. 下载结果
+        # 7. 下载结果
         resp = client.post(f"/results/{result_id}/download", headers=auth_headers)
         assert resp.status_code == 200
         assert resp.headers["content-type"] == "application/octet-stream"
 
-        # 7. 验证审计日志记录了整个流程
+        # 8. 验证审计日志记录了整个流程
         logs = db_session.query(AuditLog).all()
         actions = [log.action for log in logs]
-        assert "session_launch" in actions
-        assert "result_approved" in actions
+        assert "session_connect" in actions
+        assert "export_requested" in actions
+        assert "export_approved" in actions
         assert "result_download" in actions
 
-    def test_rejected_workflow(self, client, test_user, auth_headers, pending_dir, db_session):
-        """被拒绝的流程：保存含敏感数据的文件"""
+    def test_rejected_workflow(self, client, test_user, test_admin, auth_headers, admin_headers, pending_dir, db_session):
+        """被拒绝的流程：申请导出被管理员拒绝"""
 
-        # 模拟用户保存含手机号的文件
+        # 模拟用户保存结果文件
         csv_path = os.path.join(pending_dir, "sensitive.csv")
         with open(csv_path, "w", encoding="utf-8-sig", newline="") as f:
             writer = csv.writer(f)
             writer.writerow(["mean", "note"])
             writer.writerow(["1.0", "电话13812345678"])
 
-        resp = client.post("/results/scan", headers=auth_headers)
-        scan_data = resp.json()
-        assert scan_data["results"][0]["status"] == "rejected"
+        # 申请导出
+        client.post("/results/request-export", headers=auth_headers)
+        pid = client.get("/results/mine", headers=auth_headers).json()["pending"][0]["id"]
+
+        # 管理员拒绝
+        resp = client.post(f"/admin/pending/{pid}/reject", headers=admin_headers, json={"reason": "含敏感数据"})
+        assert resp.status_code == 200
 
         # 验证无已发布结果
         resp = client.get("/results/mine", headers=auth_headers)
@@ -508,7 +486,7 @@ class TestEndToEnd:
 
         # 验证审计日志记录了拒绝
         logs = db_session.query(AuditLog).filter(
-            AuditLog.action == "result_rejected"
+            AuditLog.action == "export_rejected"
         ).all()
         assert len(logs) >= 1
 

@@ -1,11 +1,15 @@
-"""管理员路由: 审计日志 / 待审查文件 / 用户与数据权限管理"""
+"""管理员路由: 审计日志 / 待审查文件 / 用户与数据权限管理 / 导出审核"""
+import os
+import shutil
 from fastapi import APIRouter, Depends, Query, HTTPException
 from sqlalchemy.orm import Session
 from app.database import get_db
-from app.models import User, AuditLog, PendingFile, Scope
+from app.models import User, AuditLog, PendingFile, ExportResult, Scope
 from app.auth import get_current_user, require_admin
+from app.config import settings
 from app.schemas import (
     AuditLogOut, PendingFileOut, UserAdminOut, ScopeOut, ScopeAssignRequest,
+    ExportReviewRequest,
 )
 
 router = APIRouter(prefix="/admin", tags=["管理员"])
@@ -41,10 +45,10 @@ def get_audit_logs(
     return q.order_by(AuditLog.created_at.desc()).offset(skip).limit(limit).all()
 
 
-@router.get("/pending", response_model=list[PendingFileOut], summary="查看所有待审查文件", description="""
-**查看所有用户的待审查文件（仅管理员）**
+@router.get("/pending", response_model=list[PendingFileOut], summary="查看待审核的导出申请", description="""
+**查看所有待审核的导出申请（仅管理员）**
 
-返回所有用户的 pending_files 记录，按创建时间倒序排列。
+返回所有 `status=pending` 的导出申请，按创建时间倒序排列。
 
 **错误码**
 - `401`：未认证
@@ -54,8 +58,108 @@ def get_all_pending(
     admin: User = Depends(require_admin),
     db: Session = Depends(get_db),
 ):
-    """查看所有待审查文件（管理员）"""
-    return db.query(PendingFile).order_by(PendingFile.created_at.desc()).all()
+    """查看所有待审核的导出申请（管理员）"""
+    return db.query(PendingFile).filter(
+        PendingFile.status == "pending"
+    ).order_by(PendingFile.created_at.desc()).all()
+
+
+def _published_dir(result_id: int) -> str:
+    d = os.path.join(settings.fileserver_root, "published", str(result_id))
+    os.makedirs(d, exist_ok=True)
+    return d
+
+
+@router.post("/pending/{pending_id}/approve", summary="审核通过导出申请", description="""
+**审核通过导出申请（仅管理员）**
+
+- 将待审核文件复制到 published 目录
+- 创建可下载的导出结果记录
+- 更新申请状态为 `approved`
+
+**错误码**
+- `401`：未认证
+- `403`：非管理员
+- `404`：申请不存在或已处理
+- `400`：源文件已丢失
+""")
+def approve_pending(
+    pending_id: int,
+    req: ExportReviewRequest,
+    admin: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    pf = db.query(PendingFile).filter(PendingFile.id == pending_id).first()
+    if pf is None:
+        raise HTTPException(status_code=404, detail="申请不存在")
+    if pf.status != "pending":
+        raise HTTPException(status_code=400, detail="该申请已处理")
+
+    if not os.path.exists(pf.file_path):
+        raise HTTPException(status_code=400, detail="源文件已丢失")
+
+    pub_dir = _published_dir(pf.id)
+    pub_path = os.path.join(pub_dir, pf.file_name)
+    shutil.copy2(pf.file_path, pub_path)
+
+    exp = ExportResult(
+        user_id=pf.user_id,
+        pending_file_id=pf.id,
+        result_name=pf.file_name,
+        file_path=pub_path,
+        file_size=pf.file_size,
+    )
+    db.add(exp)
+
+    pf.status = "approved"
+    pf.review_reason = req.reason or "审核通过"
+    pf.reviewed_by = admin.id
+
+    db.add(AuditLog(
+        user_id=admin.id,
+        action="export_approved",
+        detail=f"审核通过导出申请 {pf.file_name} (id={pending_id}, 用户id={pf.user_id})",
+    ))
+    db.commit()
+    db.refresh(pf)
+    return PendingFileOut.model_validate(pf)
+
+
+@router.post("/pending/{pending_id}/reject", summary="审核拒绝导出申请", description="""
+**审核拒绝导出申请（仅管理员）**
+
+- 更新申请状态为 `rejected`
+- 记录拒绝原因
+
+**错误码**
+- `401`：未认证
+- `403`：非管理员
+- `404`：申请不存在或已处理
+""")
+def reject_pending(
+    pending_id: int,
+    req: ExportReviewRequest,
+    admin: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    pf = db.query(PendingFile).filter(PendingFile.id == pending_id).first()
+    if pf is None:
+        raise HTTPException(status_code=404, detail="申请不存在")
+    if pf.status != "pending":
+        raise HTTPException(status_code=400, detail="该申请已处理")
+
+    pf.status = "rejected"
+    pf.review_reason = req.reason or "审核拒绝"
+    pf.reviewed_by = admin.id
+
+    db.add(AuditLog(
+        user_id=admin.id,
+        action="export_rejected",
+        detail=f"审核拒绝导出申请 {pf.file_name} (id={pending_id}, 用户id={pf.user_id}): {pf.review_reason}",
+    ))
+    db.commit()
+    db.refresh(pf)
+    return PendingFileOut.model_validate(pf)
 
 
 @router.get("/users", response_model=list[UserAdminOut], summary="查看所有用户", description="""

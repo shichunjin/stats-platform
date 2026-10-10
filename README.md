@@ -59,12 +59,16 @@ stats-platform/
 | POST | `/auth/register` | 用户注册（角色固定为 user，无数据权限） | 公开 |
 | POST | `/auth/login` | 登录获取 JWT Token | 公开 |
 | GET | `/auth/me` | 获取当前用户信息与数据范围 | 登录 |
-| POST | `/session/launch/{software}` | 启动远程会话（software=rstudo\|mplus\|stata） | 登录 |
-| GET | `/results/mine` | 获取我的待审查文件和已发布结果 | 登录 |
-| POST | `/results/scan` | 扫描 pending 目录并自动审查 | 登录 |
-| POST | `/results/{id}/download` | 下载已发布的结果文件 | 登录 |
+| POST | `/session/connect` | 连接 Windows 分析平台（单按钮） | 登录 |
+| POST | `/data/import` | 导入数据集 CSV 到数据库 | 管理员 |
+| POST | `/data/fetch` | 获取数据（读库生成 Excel 到文件服务器） | 登录 |
+| GET | `/results/mine` | 获取我的导出申请和已发布结果 | 登录 |
+| POST | `/results/request-export` | 申请导出结果（待管理员审核） | 登录 |
+| POST | `/results/{id}/download` | 下载已通过审核的结果文件 | 登录 |
 | GET | `/admin/audit` | 查看审计日志 | 管理员 |
-| GET | `/admin/pending` | 查看所有待审查文件 | 管理员 |
+| GET | `/admin/pending` | 查看待审核的导出申请 | 管理员 |
+| POST | `/admin/pending/{id}/approve` | 审核通过导出申请 | 管理员 |
+| POST | `/admin/pending/{id}/reject` | 审核拒绝导出申请 | 管理员 |
 | GET | `/admin/users` | 查看所有用户及其数据权限 | 管理员 |
 | GET | `/admin/scopes` | 查看所有数据范围（部门/项目） | 管理员 |
 | PUT | `/admin/users/{id}/scopes` | 分配用户数据权限（部门+项目范围） | 管理员 |
@@ -77,9 +81,11 @@ stats-platform/
 | `scopes` | 部门/项目范围（scope_code, scope_type, data_path） |
 | `user_scope` | 用户-范围关联（多对多） |
 | `sessions` | 远程会话记录（software, guac_identifier, status） |
-| `pending_files` | 待审查文件（file_path, status, review_reason） |
+| `pending_files` | 导出申请（file_path, status, review_reason） |
 | `export_results` | 已发布结果（result_name, file_path, download_count） |
 | `audit_logs` | 审计日志（action, detail, ip_addr） |
+| `dataset_meta` | 数据集元数据（列名 JSON、总行数） |
+| `dataset_rows` | 数据集行数据（每行 JSON 字典） |
 
 ## 目录结构规范
 
@@ -101,11 +107,19 @@ stats-platform/
 | 原始数据只读 | Z: 盘通过 ACL 设置 ReadAndExecute 权限 |
 | 无本地拷贝 | RDS 禁用本地驱动器映射 + 剪贴板重定向 + 打印重定向 |
 | 数据隔离 | 每用户只映射自己 dept/project 的 Z: 盘 |
-| 结果审查 | `review.py` 做白名单/敏感字段/行数/聚合检查 |
+| 结果导出审核 | 普通用户只能申请导出，管理员人工审核通过后才可下载 |
 | 多用户并行 | RDS 每用户独立 Session + 独立 W: 盘工作区 |
-| 审计追踪 | `audit_logs` 表记录登录/启动/审查/下载全链路 |
+| 审计追踪 | `audit_logs` 表记录登录/连接/申请/审核/下载全链路 |
 
-## 结果审查规则
+## 数据获取与导出流程
+
+**1. 数据获取**：管理员 `POST /data/import` 把 `testData.csv`（GBK 编码，612 列 × 1074 行医学队列数据）解析入库（`dataset_meta` + `dataset_rows`）。用户点「获取数据」→ `POST /data/fetch` 从数据库读全量数据，用 openpyxl 生成 `testData.xlsx` 存到 `fileserver_root/data/`，供用户在 Windows 平台分析使用。
+
+**2. 导出审核**：普通用户不能直接导出 Windows 平台内的任何数据。用户点「申请导出结果」→ `POST /results/request-export` 扫描其 pending 目录登记申请；管理员在「待审核导出申请」中人工 `approve` / `reject`；审核通过后结果才出现在「已发布」列表供下载。
+
+## 结果审查规则（已保留，供人工审核参考）
+
+> 说明：当前导出流程已改为「申请 → 管理员人工审批」。以下自动审查规则保留在 `review.py` 中，可作为管理员审核时的参考或后续扩展预审。
 
 - **文件类型白名单**：仅允许 `.csv` `.png` `.jpg` `.out` `.txt` `.log` `.pdf`
 - **CSV 字段白名单**：只允许聚合结果列名（mean, std, coef, p_value, rmsea, cfi 等）
