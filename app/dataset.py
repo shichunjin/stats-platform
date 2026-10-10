@@ -91,3 +91,51 @@ def generate_excel_from_db(
     wb.save(output_path)
 
     return len(rows)
+
+
+def _quote_ident(name: str) -> str:
+    """双引号包裹 SQL 标识符（列名/表名），内部双引号转义。"""
+    return '"' + name.replace('"', '""') + '"'
+
+
+def generate_excel_from_table(
+    db: Session,
+    table_name: str,
+    output_path: str,
+):
+    """从业务宽表（如 create_testdata_table.py 建的 test_data）读取全部列生成 .xlsx。
+
+    - 列名通过 SQLAlchemy inspect 获取（按数据库中列的物理顺序，排除 id 主键）
+    - 行按 id 排序，数值列保持数值类型，NULL 写为空单元格
+    - 返回 (数据行数, 列数)
+    """
+    from openpyxl import Workbook
+    from sqlalchemy import inspect, text
+
+    inspector = inspect(db.bind)
+    all_columns = [col["name"] for col in inspector.get_columns(table_name)]
+    columns = [c for c in all_columns if c != "id"]
+    if not columns:
+        raise ValueError(f"数据表 {table_name} 不存在或没有数据列")
+
+    col_sql = ", ".join(_quote_ident(c) for c in columns)
+    result = db.execute(
+        text(
+            f"SELECT {col_sql} FROM {_quote_ident(table_name)} "
+            f"ORDER BY {_quote_ident('id')}"
+        )
+    )
+
+    os.makedirs(os.path.dirname(output_path), exist_ok=True)
+
+    wb = Workbook(write_only=True)
+    ws = wb.create_sheet(title="data")
+    ws.append(columns)
+
+    row_count = 0
+    for row in result:
+        ws.append(list(row))  # None 会被 openpyxl 写为空单元格
+        row_count += 1
+
+    wb.save(output_path)
+    return row_count, len(columns)

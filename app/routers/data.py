@@ -6,7 +6,7 @@ from app.database import get_db
 from app.models import User, DatasetMeta, AuditLog
 from app.auth import get_current_user, require_admin
 from app.config import settings
-from app.dataset import import_csv_to_db, generate_excel_from_db
+from app.dataset import import_csv_to_db, generate_excel_from_table
 
 router = APIRouter(prefix="/data", tags=["数据"])
 
@@ -48,42 +48,41 @@ def import_dataset(
 
 
 @router.post("/fetch", summary="获取数据（生成 Excel 到文件服务器）", description="""
-**从数据库读取数据集并生成 Excel 文件，存放到文件服务器供用户分析**
+**从业务宽表 test_data 读取数据并生成 Excel 文件，存放到文件服务器供用户分析**
 
+- 数据来源：`create_testdata_table.py` 建立的业务宽表（默认表名 `test_data`，可用环境变量覆盖）
 - 所有登录用户获取同一份完整数据（数据权限差异暂不切分此数据集）
 - 生成的 `.xlsx` 存放到 `fileserver_root/data/{dataset_name}.xlsx`
 - 用户通过 Windows 平台（RDP）访问该文件进行分析
 
 **错误码**
 - `401`：未认证
-- `404`：数据集尚未导入（需管理员先调用 `/data/import`）
+- `404`：业务数据表不存在或没有数据列（需先运行 create_testdata_table.py）
 """)
 def fetch_data(
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    meta = db.query(DatasetMeta).filter(DatasetMeta.name == settings.dataset_name).first()
-    if meta is None:
-        raise HTTPException(status_code=404, detail="数据集尚未导入，请联系管理员导入数据")
-
     out_dir = os.path.join(settings.fileserver_root, "data")
     out_path = os.path.join(out_dir, f"{settings.dataset_name}.xlsx")
 
     try:
-        rows = generate_excel_from_db(db, out_path, name=settings.dataset_name)
+        rows, columns = generate_excel_from_table(db, settings.testdata_table, out_path)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"生成 Excel 失败: {str(e)}")
 
     db.add(AuditLog(
         user_id=user.id,
         action="data_fetch",
-        detail=f"获取数据 {settings.dataset_name}.xlsx: {rows} 行",
+        detail=f"获取数据 {settings.dataset_name}.xlsx: {rows} 行, {columns} 列（来源表 {settings.testdata_table}）",
     ))
     db.commit()
 
     return {
         "filename": f"{settings.dataset_name}.xlsx",
         "rows": rows,
-        "columns": len(meta.column_names or []),
+        "columns": columns,
         "path": out_path,
     }

@@ -24,8 +24,11 @@ class Settings(BaseSettings):
 
     # 待导入的原始数据集 CSV 路径
     dataset_csv_path: str = "testData.csv"
-    # 数据集名称（导入数据库后的标识）
+    # 数据集名称（生成 Excel 时的文件名前缀）
     dataset_name: str = "testData"
+
+    # 业务数据宽表名（create_testdata_table.py 建的表，/data/fetch 从该表读数据）
+    testdata_table: str = "test_data"
 
     # 远程桌面
     rds_host: str = "8.133.223.251"
