@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
     Stats platform - Windows user login script
 .DESCRIPTION
@@ -153,7 +153,7 @@ if ($Software -and $SoftwareConfigs.ContainsKey($Software.ToLower())) {
     $cfg = $SoftwareConfigs[$Software.ToLower()]
     if (Test-Path $cfg.Path) {
         Start-Process -FilePath $cfg.Path -WorkingDirectory $WDrive
-        Write-Host "Launched $Software: $($cfg.Path)"
+        Write-Host "Launched ${Software}: $($cfg.Path)"
     } else {
         Write-Warning "Software not installed: $($cfg.Path)"
     }
