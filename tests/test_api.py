@@ -22,12 +22,11 @@ class TestHealthCheck:
         assert resp.json() == {"status": "ok"}
 
     def test_root(self, client):
+        """根路径返回 Vue SPA 入口页（前端 history 路由入口）"""
         resp = client.get("/")
         assert resp.status_code == 200
-        data = resp.json()
-        assert data["service"] == "统计软件托管平台"
-        assert "docs" in data
-        assert "endpoints" in data
+        assert "text/html" in resp.headers["content-type"]
+        assert '<div id="app">' in resp.text
 
 
 # ============================================================

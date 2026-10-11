@@ -49,5 +49,7 @@ Thumbs.db
 
 # 前端
 frontend/node_modules/
-frontend/dist/
 frontend/*.local
+# dist 构建产物入库（部署机无 Node 环境，git pull 后由 FastAPI 直接托管；需在全局 dist/ 规则之后取反）
+!frontend/dist/
+!frontend/dist/**

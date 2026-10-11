@@ -2,7 +2,7 @@
 import os
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, RedirectResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
 from app.routers import auth, session, results, admin, data, messages, applies
 from app.database import Base, engine, SessionLocal
@@ -104,43 +104,80 @@ def health():
     return {"status": "ok"}
 
 
-@app.get("/", tags=["认证"], summary="服务根路径", description="返回平台基本信息和接口端点列表。")
-def root():
-    return {
-        "service": "统计软件托管平台",
-        "docs": "/docs",
-        "login_page": "/login",
-        "endpoints": {
-            "register": "POST /auth/register",
-            "login": "POST /auth/login",
-            "me": "GET /auth/me",
-            "connect": "POST /session/connect",
-            "fetch_data": "POST /data/fetch",
-            "my_results": "GET /results/mine",
-            "request_export": "POST /results/request-export",
-            "download": "POST /results/{id}/download",
-            "audit": "GET /admin/audit",
-        },
-    }
+# ---- 前端页面托管 ----
+# 优先托管 Vue 构建产物 frontend/dist（生产）；未构建时回退旧版静态 HTML（本地开发用 5173）
+_REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+_FRONTEND_DIST = os.path.join(_REPO_ROOT, "frontend", "dist")
+_SPA_INDEX = os.path.join(_FRONTEND_DIST, "index.html")
 
+if os.path.isfile(_SPA_INDEX):
+    # hashed 静态资源
+    _assets_dir = os.path.join(_FRONTEND_DIST, "assets")
+    if os.path.isdir(_assets_dir):
+        app.mount("/assets", StaticFiles(directory=_assets_dir), name="assets")
 
-# 静态文件目录（静态资源先于下面的 catch-all 路由注册）
-_STATIC_DIR = os.path.join(os.path.dirname(__file__), "static")
-app.mount("/static", StaticFiles(directory=_STATIC_DIR), name="static")
+    @app.middleware("http")
+    async def spa_history_fallback(request: Request, call_next):
+        """浏览器地址栏导航/刷新（Accept: text/html）统一回退到 SPA 入口。
 
+        前端 history 路由与部分 API 路径同名（如 /admin/audit），axios 请求
+        不带 text/html，会正常进入 API；仅整页导航命中此前端回退。
+        """
+        accept = request.headers.get("accept", "")
+        if request.method == "GET" and "text/html" in accept:
+            path = request.url.path
+            if not path.startswith(
+                ("/docs", "/redoc", "/openapi.json", "/assets", "/static", "/health")
+            ):
+                return FileResponse(_SPA_INDEX)
+        return await call_next(request)
 
-@app.get("/login", response_class=HTMLResponse, include_in_schema=False)
-def login_page():
-    """登录/注册页面"""
-    with open(os.path.join(_STATIC_DIR, "login.html"), "r", encoding="utf-8") as f:
-        return HTMLResponse(f.read())
+    @app.get("/{full_path:path}", response_class=HTMLResponse, include_in_schema=False)
+    def spa_entry(full_path: str):
+        """前端路由（history 模式）统一回退到 index.html；已注册 API 路由优先匹配，不会进入这里。"""
+        # dist 根目录下的真实文件（favicon.ico 等）直接返回
+        if full_path:
+            candidate = os.path.realpath(os.path.join(_FRONTEND_DIST, full_path))
+            if candidate.startswith(os.path.realpath(_FRONTEND_DIST) + os.sep) \
+                    and os.path.isfile(candidate):
+                return FileResponse(candidate)
+        return FileResponse(_SPA_INDEX)
 
+else:
+    # 未构建前端时的兜底：旧版静态页面 + 根路径服务信息
+    _STATIC_DIR = os.path.join(os.path.dirname(__file__), "static")
+    app.mount("/static", StaticFiles(directory=_STATIC_DIR), name="static")
 
-@app.get("/dashboard", response_class=HTMLResponse, include_in_schema=False)
-def dashboard_page():
-    """控制台页面"""
-    with open(os.path.join(_STATIC_DIR, "dashboard.html"), "r", encoding="utf-8") as f:
-        return HTMLResponse(f.read())
+    @app.get("/", tags=["认证"], summary="服务根路径", description="返回平台基本信息和接口端点列表。")
+    def root():
+        return {
+            "service": "统计软件托管平台",
+            "docs": "/docs",
+            "login_page": "/login",
+            "endpoints": {
+                "register": "POST /auth/register",
+                "login": "POST /auth/login",
+                "me": "GET /auth/me",
+                "connect": "POST /session/connect",
+                "fetch_data": "POST /data/fetch",
+                "my_results": "GET /results/mine",
+                "request_export": "POST /results/request-export",
+                "download": "POST /results/{id}/download",
+                "audit": "GET /admin/audit",
+            },
+        }
+
+    @app.get("/login", response_class=HTMLResponse, include_in_schema=False)
+    def login_page():
+        """登录/注册页面"""
+        with open(os.path.join(_STATIC_DIR, "login.html"), "r", encoding="utf-8") as f:
+            return HTMLResponse(f.read())
+
+    @app.get("/dashboard", response_class=HTMLResponse, include_in_schema=False)
+    def dashboard_page():
+        """控制台页面"""
+        with open(os.path.join(_STATIC_DIR, "dashboard.html"), "r", encoding="utf-8") as f:
+            return HTMLResponse(f.read())
 
 
 if __name__ == "__main__":
