@@ -105,13 +105,13 @@ $Shell = New-Object -ComObject WScript.Shell
 
 $SoftwareConfigs = @{
     rstudio = @{
-        Path = "C:\Program Files\RStudio\bin\rstudio.exe"
+        Path = "C:\Program Files\RStudio\rstudio.exe"
         Name = "RStudio"
         Args = ""
     }
     mplus = @{
-        Path = "C:\Program Files\Mplus\mplus.exe"
-        Name = "Mplus Editor"
+        Path = "C:\Program Files\Mplus Demo\Mpdwin.exe"
+        Name = "Mplus Demo"
         Args = ""
     }
     stata = @{

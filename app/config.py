@@ -48,8 +48,8 @@ class Settings(BaseSettings):
     guacamole_connection_id: str = "1"
 
     # 各软件安装路径 (Windows Server 上)
-    rstudio_path: str = r"C:\Program Files\RStudio\bin\rstudio.exe"
-    mplus_path: str = r"C:\Program Files\Mplus\mplus.exe"
+    rstudio_path: str = r"C:\Program Files\RStudio\rstudio.exe"
+    mplus_path: str = r"C:\Program Files\Mplus Demo\Mpdwin.exe"
     stata_path: str = r"C:\Program Files\Stata18\StataSE-64.exe"
 
     # PowerShell 登录脚本路径
