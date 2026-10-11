@@ -50,32 +50,24 @@ if (-not (Test-Path $UserPending)) {
 # ============================================================
 # 2. Map network drives
 # ============================================================
-# Z: -> raw data (read-only)
-if (Test-Path $ZDrive) { net use $ZDrive /delete /y }
-net use $ZDrive $UserScopeDir /persistent:no
+# Z: is mapped by the public startup script (map-z-drive.cmd -> \\127.0.0.1\StatsData,
+# the shared public dataset). Do NOT touch Z: here to avoid fighting that mapping.
 
-# W: -> user workspace (writable)
+# W: -> user workspace (writable, PRIVATE per user)
 if (Test-Path $WDrive) { net use $WDrive /delete /y }
 net use $WDrive $UserWorkspace /persistent:no
 
 # ============================================================
-# 3. Set folder permissions (Z: read-only, W: writable)
+# 3. Set folder permissions (W: strictly private per user)
 # ============================================================
-# Z: drive - current user read-only
-$aclZ = Get-Acl $UserScopeDir
-$rule = New-Object System.Security.AccessControl.FileSystemAccessRule(
-    $env:USERNAME, "ReadAndExecute", "ContainerInherit,ObjectInherit", "None", "Allow"
-)
-$aclZ.SetAccessRule($rule)
-Set-Acl -Path $UserScopeDir -AclObject $aclZ
+# Strip inherited permissions so other users can never read this
+# user's workspace, then grant only: current user, SYSTEM, Administrators.
+icacls $UserWorkspace /inheritance:r | Out-Null
+icacls $UserWorkspace /grant "$($env:USERNAME):(OI)(CI)F" "SYSTEM:(OI)(CI)F" "Administrators:(OI)(CI)F" | Out-Null
 
-# W: drive - current user full control
-$aclW = Get-Acl $UserWorkspace
-$ruleW = New-Object System.Security.AccessControl.FileSystemAccessRule(
-    $env:USERNAME, "FullControl", "ContainerInherit,ObjectInherit", "None", "Allow"
-)
-$aclW.SetAccessRule($ruleW)
-Set-Acl -Path $UserWorkspace -AclObject $aclW
+# Pending (results output) directory: same strict isolation
+icacls $UserPending /inheritance:r | Out-Null
+icacls $UserPending /grant "$($env:USERNAME):(OI)(CI)F" "SYSTEM:(OI)(CI)F" "Administrators:(OI)(CI)F" | Out-Null
 
 # ============================================================
 # 4. Write registry/environment variables: software working directories
@@ -161,7 +153,7 @@ if ($Software -and $SoftwareConfigs.ContainsKey($Software.ToLower())) {
 
 Write-Host "========================================"
 Write-Host "User $Username login environment initialized"
-Write-Host "  Z: (raw data, read-only) = $UserScopeDir"
+Write-Host "  Z: (public dataset, read-only) = \\127.0.0.1\StatsData"
 Write-Host "  W: (workspace, writable) = $UserWorkspace"
 Write-Host "  Result output directory = $UserPending"
 Write-Host "========================================"
