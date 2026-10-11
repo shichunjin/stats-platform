@@ -125,3 +125,59 @@ class UserAdminOut(BaseModel):
     dept: Optional[ScopeOut] = Field(None, description="所属部门信息")
     scopes: List[ScopeOut] = Field(default_factory=list, description="可访问的数据范围列表")
     created_at: Optional[datetime] = Field(None, description="注册时间")
+
+
+# ---- 消息中心 ----
+class MessageOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    title: str
+    content: Optional[str] = None
+    type: str = Field("info", description="类型：info/success/warning")
+    read: bool = Field(False, description="是否已读")
+    link: Optional[str] = Field(None, description="点击跳转路径")
+    created_at: Optional[datetime] = None
+
+
+# ---- 数据申请 ----
+class DataApplyCreate(BaseModel):
+    purpose: str = Field(..., min_length=1, description="数据用途")
+    fields: List[str] = Field(default_factory=list, description="所需字段")
+    time_range: Optional[List[Optional[str]]] = Field(None, description="[起始时间, 结束时间] ISO 字符串")
+    priority: str = Field("medium", description="优先级：low/medium/high")
+
+
+class DataApplyOut(BaseModel):
+    id: int
+    data_name: str
+    purpose: str
+    fields: List[str] = Field(default_factory=list)
+    time_range: Optional[List[Optional[str]]] = None
+    priority: str
+    status: str
+    reject_reason: Optional[str] = None
+    apply_time: Optional[datetime] = None
+    finish_time: Optional[datetime] = None
+    target_user_id: int
+
+
+class DataApplyRejectRequest(BaseModel):
+    reason: str = Field(..., min_length=1, description="驳回原因")
+
+
+# ---- 数据筛选与生成 ----
+class FilteredDataGenerateRequest(BaseModel):
+    filters: dict = Field(default_factory=dict, description="筛选条件：列名 -> 值/[min,max]/模糊文本")
+    target_user_id: int = Field(..., description="接收数据的目标用户 ID")
+    filename: Optional[str] = Field(None, description="目标文件名（含扩展名），留空自动命名")
+    apply_id: Optional[int] = Field(None, description="关联的数据申请 ID（可选，生成后自动置为完成）")
+
+
+class DataColumnOut(BaseModel):
+    name: str = Field(..., description="列名")
+    type: str = Field(..., description="数据类型：int/float/text")
+    control: str = Field(..., description="筛选控件：select/range/input")
+    options: Optional[List] = Field(None, description="枚举值（control=select 时）")
+    min: Optional[float] = Field(None, description="最小值（control=range 时）")
+    max: Optional[float] = Field(None, description="最大值（control=range 时）")

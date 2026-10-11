@@ -39,6 +39,8 @@ class Settings(BaseSettings):
     sftp_passphrase: str = ""
     # Windows 上的目标目录（SFTP 路径用正斜杠）
     windows_data_dir: str = "C:/StatsData"
+    # 用户工作区根目录（管理员按申请生成的数据推送到 {该目录}/{用户名}/，对应用户的 W: 盘）
+    windows_workspace_dir: str = "C:/workspace"
 
     # 远程桌面
     rds_host: str = "8.133.223.251"

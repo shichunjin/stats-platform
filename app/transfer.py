@@ -73,27 +73,33 @@ def _ensure_remote_dir(sftp: paramiko.SFTPClient, remote_dir: str):
             sftp.mkdir(current)
 
 
-def upload_file_to_windows(local_path: str) -> str:
-    """把本地文件 SFTP 上传到 Windows 云主机配置的目录下。
+def upload_file_to_windows(
+    local_path: str,
+    remote_dir: str | None = None,
+    remote_name: str | None = None,
+) -> str:
+    """把本地文件 SFTP 上传到 Windows 云主机。
 
-    - 文件名沿用本地文件名
+    - remote_dir：远端目录（不传则使用配置中的公共数据目录），支持子目录，
+      不存在会自动递归创建（可用于按用户隔离的目录）
+    - remote_name：远端文件名（不传则沿用本地文件名）
     - 返回 Windows 风格路径（如 C:\\StatsData\\testData.xlsx）
     """
     if not os.path.exists(local_path):
         raise FileNotFoundError(f"待上传文件不存在: {local_path}")
 
-    filename = os.path.basename(local_path)
-    remote_dir = settings.windows_data_dir.replace("\\", "/").rstrip("/")
-    remote_path = f"{remote_dir}/{filename}"
+    filename = remote_name or os.path.basename(local_path)
+    target_dir = (remote_dir or settings.windows_data_dir).replace("\\", "/").rstrip("/")
+    remote_path = f"{target_dir}/{filename}"
 
     sftp, ssh = _connect_sftp()
     try:
-        _ensure_remote_dir(sftp, remote_dir)
+        _ensure_remote_dir(sftp, target_dir)
         sftp.put(local_path, remote_path)
     finally:
         sftp.close()
         ssh.close()
 
     # 返回展示用的 Windows 本地路径
-    win_dir = settings.windows_data_dir.replace("/", "\\").rstrip("\\")
+    win_dir = target_dir.replace("/", "\\")
     return f"{win_dir}\\{filename}"

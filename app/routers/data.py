@@ -1,13 +1,20 @@
-"""数据路由：数据集导入 + 获取数据生成 Excel"""
+"""数据路由：数据集导入 + 获取数据生成 Excel + 列结构分析 + 按筛选生成"""
 import os
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from app.database import get_db
-from app.models import User, DatasetMeta, AuditLog
+from app.models import User, AuditLog, Message, DataApply
 from app.auth import get_current_user, require_admin
 from app.config import settings
-from app.dataset import import_csv_to_db, generate_excel_from_table
+from app.dataset import (
+    import_csv_to_db,
+    generate_excel_from_table,
+    generate_filtered_excel_from_table,
+    analyze_table_columns,
+    timestamp_filename,
+)
 from app.transfer import upload_file_to_windows
+from app.schemas import FilteredDataGenerateRequest
 
 router = APIRouter(prefix="/data", tags=["数据"])
 
@@ -75,7 +82,7 @@ def fetch_data(
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"生成 Excel 失败: {str(e)}")
 
-    # SFTP 推送到 Windows 云主机
+    # SFTP 推送到 Windows 云主机（公共数据目录，Z: 盘）
     try:
         win_path = upload_file_to_windows(out_path)
     except Exception as e:
@@ -98,4 +105,114 @@ def fetch_data(
         "columns": columns,
         "local_path": out_path,
         "windows_path": win_path,
+    }
+
+
+@router.get("/columns", summary="获取数据表列结构（智能筛选控件元数据，管理员）", description="""
+**分析 test_data 宽表的列结构，供前端「数据筛选与生成」页智能渲染控件**
+
+- 枚举值少（≤10）的列 → `control=select`，返回 `options`
+- 数值列 → `control=range`，返回 `min/max`
+- 文本列 → `control=input`（模糊搜索）
+- 结果按行数缓存，数据变化后自动刷新
+""")
+def get_columns(
+    admin: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    try:
+        return analyze_table_columns(db, settings.testdata_table)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"分析列结构失败: {str(e)}")
+
+
+@router.post("/generate", summary="按筛选条件生成数据并推送给目标用户（管理员）", description="""
+**管理员在数据筛选页确认生成：**
+
+- 按 `filters` 从 test_data 宽表筛选数据生成 `.xlsx`
+- 文件命名 `{原始名}_{YYYYMMDD_HHmmss}.xlsx`，不覆盖历史文件
+- 通过 SFTP 写入目标用户在 Windows 云平台的个人工作区目录（W: 盘）
+- 自动给目标用户发送站内消息；若带 `apply_id` 则把申请置为「已完成」
+- 失败返回 500/502，前端可在错误日志中手动重试
+
+**filters 取值形式**
+- 枚举下拉：`{"sex33": 1}`（等值）或 `{"sex33": [1, 2]}`（多选 IN）
+- 数值区间：`{"age33": [20, 35]}`（端点可为 null）
+- 文本模糊：`{"姓名": "张"}`
+""")
+def generate_filtered(
+    payload: FilteredDataGenerateRequest,
+    admin: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    # 校验目标用户
+    target = db.query(User).filter(User.id == payload.target_user_id).first()
+    if target is None:
+        raise HTTPException(status_code=404, detail="目标用户不存在")
+
+    # 文件名：前端指定或按时间戳自动生成
+    filename = payload.filename or timestamp_filename(settings.dataset_name)
+    if not filename.lower().endswith(".xlsx"):
+        filename += ".xlsx"
+
+    out_dir = os.path.join(settings.fileserver_root, "generated", str(target.id))
+    out_path = os.path.join(out_dir, filename)
+
+    # 1. 按筛选生成 Excel
+    try:
+        rows, columns = generate_filtered_excel_from_table(
+            db, settings.testdata_table, out_path, payload.filters
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"生成 Excel 失败: {str(e)}")
+
+    # 2. 推送到目标用户的 Windows 个人工作区（W: 盘根目录）
+    remote_dir = f"{settings.windows_workspace_dir}/{target.username}"
+    try:
+        win_path = upload_file_to_windows(out_path, remote_dir=remote_dir, remote_name=filename)
+    except Exception as e:
+        raise HTTPException(
+            status_code=502,
+            detail=f"Excel 已生成，但推送到 Windows 云平台失败: {str(e)}",
+        )
+
+    # 3. 关联申请置为完成
+    apply_obj = None
+    if payload.apply_id:
+        apply_obj = db.query(DataApply).filter(DataApply.id == payload.apply_id).first()
+        if apply_obj and apply_obj.status != "completed":
+            from datetime import datetime
+            apply_obj.status = "completed"
+            apply_obj.finished_at = datetime.utcnow()
+            apply_obj.processed_by = admin.id
+
+    # 4. 站内消息通知目标用户
+    db.add(Message(
+        user_id=target.id,
+        title="您申请的数据已生成",
+        content=f"数据文件 {filename}（{rows} 行 × {columns} 列）已生成，"
+                f"请连接 Windows 分析平台，在 W: 盘打开使用。",
+        msg_type="success",
+        link="/user/my-requests",
+    ))
+
+    db.add(AuditLog(
+        user_id=admin.id,
+        action="data_generate",
+        detail=f"为用户 {target.username}(id={target.id}) 生成 {filename}: "
+               f"{rows} 行, {columns} 列，筛选 {len(payload.filters)} 项，推送至 {win_path}",
+    ))
+    db.commit()
+
+    return {
+        "filename": filename,
+        "rows": rows,
+        "columns": columns,
+        "target_user": target.display_name or target.username,
+        "windows_path": win_path,
+        "local_path": out_path,
     }

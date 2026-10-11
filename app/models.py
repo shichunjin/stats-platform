@@ -117,3 +117,38 @@ class DatasetRow(Base):
     data = Column(JSON)                  # {列名: 值}
 
     dataset = relationship("DatasetMeta")
+
+
+class DataApply(Base):
+    """用户数据申请"""
+    __tablename__ = "data_applies"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    data_name = Column(String(128), default="testData")
+    purpose = Column(Text, nullable=False)
+    fields = Column(JSON)                # 所需字段列表
+    time_start = Column(DateTime)        # 时间范围起
+    time_end = Column(DateTime)          # 时间范围止
+    priority = Column(String(16), default="medium")   # low | medium | high
+    status = Column(String(16), default="pending")    # pending | processing | completed | rejected
+    reject_reason = Column(Text)
+    processed_by = Column(Integer, ForeignKey("users.id"))
+    finished_at = Column(DateTime)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    user = relationship("User", foreign_keys=[user_id])
+
+
+class Message(Base):
+    """站内消息（管理员处理完成后通知用户）"""
+    __tablename__ = "messages"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    title = Column(String(256), nullable=False)
+    content = Column(Text)
+    msg_type = Column(String(16), default="info")     # info | success | warning
+    link = Column(String(256))                        # 点击跳转的前端路径
+    is_read = Column(Boolean, default=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    user = relationship("User")

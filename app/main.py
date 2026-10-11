@@ -4,7 +4,7 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
-from app.routers import auth, session, results, admin, data
+from app.routers import auth, session, results, admin, data, messages, applies
 from app.database import Base, engine, SessionLocal
 from app.models import User, Scope, AuditLog
 from app.auth import DEMO_ACCOUNTS, DEMO_USERS
@@ -95,6 +95,8 @@ app.include_router(session.router)
 app.include_router(results.router)
 app.include_router(admin.router)
 app.include_router(data.router)
+app.include_router(messages.router)
+app.include_router(applies.router)
 
 
 @app.get("/health", tags=["认证"], summary="健康检查", description="检查服务运行状态，无需认证。")
