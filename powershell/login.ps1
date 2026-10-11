@@ -22,7 +22,7 @@ $ErrorActionPreference = "Stop"
 # ============================================================
 # Path constants
 # ============================================================
-$FileServer = "\\fileserver"
+$FileServer = "\\127.0.0.1"
 $DataRoot     = "$FileServer\data"
 $WorkspaceRoot = "$FileServer\workspace"
 $PendingRoot  = "$FileServer\pending"
