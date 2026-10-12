@@ -26,6 +26,10 @@ services:
   postgres:
     image: postgres:15-alpine
     restart: always
+    ports:
+      # 映射到宿主机回环地址，供托管平台后端（uvicorn）同步创建/更新用户
+      # 仅绑定 127.0.0.1，不对外网暴露
+      - "127.0.0.1:5433:5432"
     environment:
       POSTGRES_DB: guacamole_db
       POSTGRES_USER: guacamole_user
