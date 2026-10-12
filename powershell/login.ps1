@@ -127,6 +127,16 @@ foreach ($key in $SoftwareConfigs.Keys) {
     }
 }
 
+# Desktop shortcut to the user's own workspace (opens in Explorer)
+$lnkPath = "$Desktop\我的工作目录.lnk"
+$shortcut = $Shell.CreateShortcut($lnkPath)
+$shortcut.TargetPath = "$env:SystemRoot\explorer.exe"
+$shortcut.Arguments = $WDrive
+$shortcut.WorkingDirectory = $WDrive
+$shortcut.IconLocation = "%SystemRoot%\system32\shell32.dll,3"
+$shortcut.Description = "打开我的数据工作目录 (W:)"
+$shortcut.Save()
+
 # ============================================================
 # 6. Disable RDP clipboard and local drive redirection (registry)
 # ============================================================
