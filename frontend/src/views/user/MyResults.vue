@@ -25,14 +25,31 @@
     <h4 style="margin: 20px 0 8px; color: #606266;">已发布（可下载）</h4>
     <el-table :data="published" v-loading="loading" stripe>
       <el-table-column prop="result_name" label="文件名" />
-      <el-table-column label="大小" width="120">
+      <el-table-column label="大小" width="110">
         <template #default="{ row }">{{ formatSize(row.file_size) }}</template>
       </el-table-column>
-      <el-table-column prop="download_count" label="下载次数" width="100" />
-      <el-table-column prop="created_at" label="发布时间" width="170" />
+      <el-table-column prop="download_count" label="下载次数" width="90" />
+      <el-table-column prop="created_at" label="生成时间" width="170">
+        <template #default="{ row }">{{ formatTime(row.created_at) }}</template>
+      </el-table-column>
+      <el-table-column label="有效期" width="190">
+        <template #default="{ row }">
+          <template v-if="row.expires_at">
+            <el-tag v-if="isExpired(row)" type="danger" size="small">已过期</el-tag>
+            <span v-else>{{ formatTime(row.expires_at) }} 前有效</span>
+          </template>
+          <span v-else>永久有效</span>
+        </template>
+      </el-table-column>
       <el-table-column label="操作" width="100">
         <template #default="{ row }">
-          <el-button type="primary" link @click="download(row.id)">下载</el-button>
+          <el-tooltip :disabled="!isExpired(row)" content="文件已过期，无法下载" placement="top">
+            <span>
+              <el-button type="primary" link :disabled="isExpired(row)" @click="download(row)">
+                {{ isExpired(row) ? '已过期' : '下载' }}
+              </el-button>
+            </span>
+          </el-tooltip>
         </template>
       </el-table-column>
     </el-table>
@@ -78,18 +95,33 @@ async function onExport() {
   }
 }
 
-async function download(id: number) {
+async function download(row: ExportResult) {
+  if (isExpired(row)) {
+    ElMessage.warning('文件已过期，无法下载')
+    return
+  }
   try {
-    const blob = await downloadResult(id)
+    const blob = await downloadResult(row.id)
     const url = URL.createObjectURL(blob)
     const a = document.createElement('a')
     a.href = url
-    a.download = `result_${id}`
+    a.download = row.result_name || `result_${row.id}`
     a.click()
     URL.revokeObjectURL(url)
   } catch {
-    /* 拦截器处理 */
+    /* 拦截器处理（过期时后端返回 410 已过期提示） */
   }
+}
+
+// 有效期判断（expires_at 为 null 表示永久有效）
+function isExpired(row: ExportResult): boolean {
+  if (!row.expires_at) return false
+  return new Date(row.expires_at).getTime() < Date.now()
+}
+
+function formatTime(v?: string | null) {
+  if (!v) return '-'
+  return String(v).replace('T', ' ').slice(0, 16)
 }
 
 function formatSize(b?: number | null) {

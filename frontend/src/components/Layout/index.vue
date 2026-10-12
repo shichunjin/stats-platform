@@ -116,21 +116,23 @@ const activeMenu = computed(() => route.path)
 const currentTitle = computed(() => (route.meta?.title as string) || '首页')
 
 // 根据角色过滤菜单
+// 约束：管理员端导航只允许出现 6 个菜单项，不得新增其他菜单
 const menuList = computed(() => {
-  const all = [
-    { path: '/dashboard', title: '首页', icon: 'HomeFilled', roles: ['user', 'admin'] },
-    { path: '/user/data-request', title: '申请获取数据', icon: 'Download', roles: ['user', 'admin'] },
-    { path: '/user/my-requests', title: '我的申请', icon: 'Document', roles: ['user', 'admin'] },
-    { path: '/user/my-results', title: '我的结果文件', icon: 'FolderOpened', roles: ['user', 'admin'] },
-    { path: '/user/messages', title: '消息中心', icon: 'Bell', roles: ['user', 'admin'] },
-    { path: '/admin/pending-data', title: '待处理数据申请', icon: 'List', roles: ['admin'] },
-    { path: '/admin/data-filter', title: '数据筛选与生成', icon: 'Filter', roles: ['admin'] },
-    { path: '/admin/pending-exports', title: '待审核导出申请', icon: 'Checked', roles: ['admin'] },
-    { path: '/admin/user-scopes', title: '用户数据权限', icon: 'UserFilled', roles: ['admin'] },
-    { path: '/admin/platform-config', title: '连接Windows平台', icon: 'Connection', roles: ['admin'] },
-    { path: '/admin/audit', title: '审计日志', icon: 'DocumentCopy', roles: ['admin'] },
+  const adminMenu = [
+    { path: '/admin/pending-data', title: '待处理数据申请', icon: 'List' },
+    { path: '/admin/data-filter', title: '数据筛选与生成', icon: 'Filter' },
+    { path: '/admin/pending-exports', title: '待审核导出申请', icon: 'Checked' },
+    { path: '/admin/user-scopes', title: '用户数据权限', icon: 'UserFilled' },
+    { path: '/admin/platform-config', title: '连接数据分析PC', icon: 'Connection' },
+    { path: '/admin/audit', title: '审计日志', icon: 'DocumentCopy' },
   ]
-  return all.filter((m) => m.roles.includes(userStore.user?.role || 'user'))
+  const userMenu = [
+    { path: '/user/data-request', title: '申请获取数据', icon: 'Download' },
+    { path: '/user/my-requests', title: '我的申请记录', icon: 'Document' },
+    { path: '/user/my-results', title: '我的结果文件', icon: 'FolderOpened' },
+    { path: '/user/messages', title: '消息中心', icon: 'Bell' },
+  ]
+  return userStore.isAdmin ? adminMenu : userMenu
 })
 
 onMounted(() => {

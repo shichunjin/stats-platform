@@ -59,6 +59,7 @@ export interface ExportResult {
   result_name: string
   file_size?: number | null
   download_count: number
+  expires_at?: string | null
   created_at?: string | null
 }
 
@@ -69,6 +70,7 @@ export interface AuditLog {
   action: string
   detail?: string | null
   ip_addr?: string | null
+  status?: 'success' | 'failed' | string
   created_at?: string | null
 }
 
@@ -87,6 +89,8 @@ export interface DataApply {
   apply_time: string
   finish_time?: string
   target_user_id?: number
+  username?: string
+  display_name?: string | null
 }
 
 // ---- 消息 ----
@@ -101,11 +105,11 @@ export interface Message {
 }
 
 // ---- 数据列（用于智能筛选控件渲染） ----
-export type ColumnControlType = 'select' | 'range' | 'input'
+export type ColumnControlType = 'select' | 'range' | 'daterange' | 'input'
 
 export interface DataColumn {
   name: string
-  type: 'int' | 'float' | 'text'
+  type: 'int' | 'float' | 'text' | 'date'
   control: ColumnControlType
   options?: string[] | number[]
   min?: number
@@ -118,5 +122,6 @@ export interface PlatformConfig {
   port: number
   username: string
   password: string
+  workspace_dir: string
   output_path: string
 }

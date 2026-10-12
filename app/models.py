@@ -82,6 +82,7 @@ class ExportResult(Base):
     file_path = Column(String(512), nullable=False)
     file_size = Column(BigInteger)
     download_count = Column(Integer, default=0)
+    expires_at = Column(DateTime)                    # 有效期，过期不可下载（null = 永久有效）
     created_at = Column(DateTime, default=datetime.utcnow)
 
     user = relationship("User", foreign_keys=[user_id])
@@ -95,6 +96,7 @@ class AuditLog(Base):
     action = Column(String(64), nullable=False)
     detail = Column(Text)
     ip_addr = Column(String(64))
+    status = Column(String(16), default="success")   # 结果状态：success | failed
     created_at = Column(DateTime, default=datetime.utcnow)
 
 

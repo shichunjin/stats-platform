@@ -37,3 +37,24 @@ export function getDataApplies(status?: string) {
 export function rejectDataApply(id: number, reason: string) {
   return request.post<unknown, DataApply>(`/admin/data-applies/${id}/reject`, { reason })
 }
+
+// 申请进入处理中（批量通过时逐条调用）
+export function processDataApply(id: number) {
+  return request.post<unknown, DataApply>(`/admin/data-applies/${id}/process`)
+}
+
+// ---- 数据分析PC连接 ----
+export interface PlatformTestResult {
+  success: boolean
+  message: string
+  latency_ms?: number
+}
+
+export function testPlatform(payload: {
+  host: string
+  port: number
+  username: string
+  password: string
+}) {
+  return request.post<unknown, PlatformTestResult>('/admin/platform/test', payload)
+}

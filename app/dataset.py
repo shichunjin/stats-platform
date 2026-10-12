@@ -216,14 +216,24 @@ def analyze_table_columns(db: Session, table_name: str, use_cache: bool = True) 
                 col_info["min"] = min(nums)
                 col_info["max"] = max(nums)
         else:
+            # 日期列：样本全部能解析为日期 → 日期范围选择
+            if _all_date(values):
+                dates = [_parse_date(v) for v in values]
+                ds = [d.strftime("%Y-%m-%d") for d in dates if d is not None]
+                col_info["type"] = "date"
+                col_info["control"] = "daterange"
+                if ds:
+                    col_info["min"] = min(ds)
+                    col_info["max"] = max(ds)
             # 文本列：去重值少 → 下拉，否则模糊输入
-            col_info["type"] = "text"
-            distinct = list(dict.fromkeys(str(v) for v in values))
-            if 0 < len(distinct) <= MAX_ENUM_VALUES:
-                col_info["control"] = "select"
-                col_info["options"] = distinct
             else:
-                col_info["control"] = "input"
+                col_info["type"] = "text"
+                distinct = list(dict.fromkeys(str(v) for v in values))
+                if 0 < len(distinct) <= MAX_ENUM_VALUES:
+                    col_info["control"] = "select"
+                    col_info["options"] = distinct
+                else:
+                    col_info["control"] = "input"
 
         meta.append(col_info)
 
@@ -243,18 +253,51 @@ def _all_float(values: list) -> bool:
     return True
 
 
+_DATE_FORMATS = ("%Y-%m-%d", "%Y/%m/%d", "%Y-%m-%d %H:%M:%S", "%Y/%m/%d %H:%M:%S")
+
+
+def _parse_date(v: Any) -> Optional[Any]:
+    """尝试把样本值解析为日期，失败返回 None。"""
+    from datetime import datetime as _dt
+
+    if isinstance(v, _dt):
+        return v
+    if not isinstance(v, str):
+        return None
+    s = v.strip()
+    try:
+        return _dt.fromisoformat(s)
+    except ValueError:
+        pass
+    for fmt in _DATE_FORMATS:
+        try:
+            return _dt.strptime(s, fmt)
+        except ValueError:
+            continue
+    return None
+
+
+def _all_date(values: list) -> bool:
+    """样本值是否全部可解析为日期（用于识别日期字段）。"""
+    if not values:
+        return False
+    return all(_parse_date(v) is not None for v in values)
+
+
 def _build_where_clause(
     filters: dict[str, Any],
     valid_columns: set[str],
+    col_controls: Optional[dict[str, str]] = None,
 ) -> tuple[str, dict[str, Any]]:
     """把前端筛选条件转为参数化 WHERE 子句，返回 (sql, params)。
 
     支持的取值形式：
       - 标量数字/字符串        → 数值等值 / 文本 ILIKE 模糊
-      - [min, max]（可含 null）→ 数值区间
+      - [min, max]（可含 null）→ 数值区间；日期列（control=daterange）为字符串区间
       - 列表（枚举多选）        → IN
     列名先做白名单校验，防止 SQL 注入。
     """
+    controls = col_controls or {}
     clauses: list[str] = []
     params: dict[str, Any] = {}
     seq = 0
@@ -266,9 +309,10 @@ def _build_where_clause(
         key = f"f{seq}"
         seq += 1
 
-        # 区间：两元素数组
-        if isinstance(val, (list, tuple)) and len(val) == 2 and all(
-            v is None or isinstance(v, (int, float)) for v in val
+        # 区间：两元素数组（数值区间 或 日期区间）
+        if isinstance(val, (list, tuple)) and len(val) == 2 and (
+            controls.get(col) == "daterange"
+            or all(v is None or isinstance(v, (int, float)) for v in val)
         ):
             low, high = val
             if low is not None:
@@ -320,7 +364,12 @@ def generate_filtered_excel_from_table(
         raise ValueError(f"数据表 {table_name} 不存在或没有数据列")
 
     valid = set(columns)
-    where_sql, params = _build_where_clause(filters or {}, valid)
+    # 列控件类型（select/range/daterange/input），用于区分日期区间与枚举多选
+    try:
+        controls = {c["name"]: c.get("control", "") for c in analyze_table_columns(db, table_name)}
+    except ValueError:
+        controls = {}
+    where_sql, params = _build_where_clause(filters or {}, valid, controls)
 
     col_sql = ", ".join(_quote_ident(c) for c in columns)
     result = db.execute(

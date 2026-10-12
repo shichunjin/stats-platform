@@ -88,6 +88,7 @@ class ExportResultOut(BaseModel):
     result_name: str = Field(..., description="结果文件名")
     file_size: Optional[int] = Field(None, description="文件大小（字节）")
     download_count: int = Field(0, description="累计下载次数")
+    expires_at: Optional[datetime] = Field(None, description="有效期，过期不可下载（null=永久）")
     created_at: Optional[datetime] = Field(None, description="发布时间")
 
 
@@ -100,6 +101,7 @@ class AuditLogOut(BaseModel):
     action: str = Field(..., description="操作类型（如 login/session_launch/result_approved）")
     detail: Optional[str] = Field(None, description="操作详情")
     ip_addr: Optional[str] = Field(None, description="来源 IP")
+    status: str = Field("success", description="结果状态：success / failed")
     created_at: Optional[datetime] = Field(None, description="操作时间")
 
 

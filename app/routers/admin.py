@@ -2,6 +2,7 @@
 import os
 import shutil
 from fastapi import APIRouter, Depends, Query, HTTPException
+from pydantic import BaseModel
 from sqlalchemy.orm import Session
 from app.database import get_db
 from app.models import User, AuditLog, PendingFile, ExportResult, Scope
@@ -102,12 +103,17 @@ def approve_pending(
     pub_path = os.path.join(pub_dir, pf.file_name)
     shutil.copy2(pf.file_path, pub_path)
 
+    # 有效期：审核通过后 30 天内可下载，过期自动拒绝
+    from datetime import datetime, timedelta
+    expires_at = datetime.utcnow() + timedelta(days=30)
+
     exp = ExportResult(
         user_id=pf.user_id,
         pending_file_id=pf.id,
         result_name=pf.file_name,
         file_path=pub_path,
         file_size=pf.file_size,
+        expires_at=expires_at,
     )
     db.add(exp)
 
@@ -248,3 +254,74 @@ def assign_user_scopes(
     db.commit()
     db.refresh(user)
     return user
+
+
+class PlatformTestRequest(BaseModel):
+    """测试连接数据分析PC的请求参数"""
+    host: str
+    port: int = 22
+    username: str
+    password: str = ""
+
+
+@router.post("/platform/test", summary="测试连接数据分析PC", description="""
+**测试与数据分析PC（Windows）的 SSH/SFTP 连通性（仅管理员）**
+
+用于「连接数据分析PC」页面的测试连接按钮：
+- 尝试建立 SSH 连接并认证
+- 成功返回耗时；失败返回具体错误信息（网络不通 / 认证失败等）
+
+**错误码**
+- `401`：未认证
+- `403`：非管理员
+- `502`：连接失败（detail 为具体原因）
+""")
+def test_platform_connection(
+    req: PlatformTestRequest,
+    admin: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    import time
+    import paramiko
+    import socket
+
+    start = time.time()
+    client = paramiko.SSHClient()
+    client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+    try:
+        client.connect(
+            hostname=req.host,
+            port=req.port,
+            username=req.username,
+            password=req.password,
+            timeout=8,
+            allow_agent=False,
+            look_for_keys=False,
+        )
+        latency_ms = int((time.time() - start) * 1000)
+        db.add(AuditLog(
+            user_id=admin.id,
+            action="platform_test",
+            detail=f"测试连接数据分析PC成功: {req.host}:{req.port} ({latency_ms}ms)",
+        ))
+        db.commit()
+        return {"success": True, "message": f"连接成功（{latency_ms}ms）", "latency_ms": latency_ms}
+    except socket.timeout:
+        msg = f"连接超时：无法在 8 秒内连上 {req.host}:{req.port}，请检查地址/端口/防火墙"
+    except paramiko.AuthenticationException:
+        msg = "认证失败：用户名或密码错误"
+    except (ConnectionRefusedError, OSError) as e:
+        msg = f"网络错误：{e}"
+    except Exception as e:  # paramiko.SSHException 等
+        msg = f"连接失败：{e}"
+    finally:
+        client.close()
+
+    db.add(AuditLog(
+        user_id=admin.id,
+        action="platform_test",
+        detail=f"测试连接数据分析PC失败: {req.host}:{req.port} — {msg}",
+        status="failed",
+    ))
+    db.commit()
+    raise HTTPException(status_code=502, detail=msg)

@@ -135,6 +135,18 @@ def download_result(
     if exp is None:
         raise HTTPException(status_code=404, detail="结果不存在或无权访问")
 
+    # 数据归属 + 有效期校验：过期文件不可下载
+    from datetime import datetime as _dt
+    if exp.expires_at is not None and exp.expires_at < _dt.utcnow():
+        db.add(AuditLog(
+            user_id=user.id,
+            action="result_download_expired",
+            detail=f"下载被拒绝（已过期）：{exp.result_name} (id={result_id})",
+            status="failed",
+        ))
+        db.commit()
+        raise HTTPException(status_code=410, detail="文件已过期，无法下载")
+
     if not os.path.exists(exp.file_path):
         raise HTTPException(status_code=404, detail="文件不存在")
 

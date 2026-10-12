@@ -43,6 +43,8 @@ def _to_dict(a: DataApply) -> dict:
         "apply_time": a.created_at.isoformat() if a.created_at else None,
         "finish_time": a.finished_at.isoformat() if a.finished_at else None,
         "target_user_id": a.user_id,
+        "username": a.user.username if a.user else None,
+        "display_name": a.user.display_name if a.user else None,
     }
 
 
@@ -110,6 +112,29 @@ def admin_list_applies(
         q = q.filter(DataApply.status == status)
     rows = q.order_by(DataApply.created_at.desc(), DataApply.id.desc()).all()
     return [_to_dict(a) for a in rows]
+
+
+@router.post("/admin/data-applies/{apply_id}/process", summary="申请进入处理中（管理员）")
+def admin_process_apply(
+    apply_id: int,
+    admin: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    """把待审核申请置为 processing（进入处理队列，供批量通过使用）。"""
+    apply_obj = db.query(DataApply).filter(DataApply.id == apply_id).first()
+    if apply_obj is None:
+        raise HTTPException(status_code=404, detail="申请不存在")
+    if apply_obj.status != "pending":
+        raise HTTPException(status_code=400, detail="仅待审核申请可进入处理中")
+
+    apply_obj.status = "processing"
+    apply_obj.processed_by = admin.id
+
+    db.add(AuditLog(user_id=admin.id, action="data_apply_process",
+                    detail=f"申请 #{apply_obj.id} 进入处理中"))
+    db.commit()
+    db.refresh(apply_obj)
+    return _to_dict(apply_obj)
 
 
 @router.post("/admin/data-applies/{apply_id}/reject", summary="驳回数据申请（管理员）")
