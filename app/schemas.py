@@ -32,6 +32,12 @@ class RegisterResponse(BaseModel):
     message: str = Field(..., description="提示信息")
 
 
+class ChangePasswordRequest(BaseModel):
+    old_password: str = Field(..., description="原密码")
+    new_password: str = Field(..., min_length=6, max_length=64,
+                              description="新密码（6-64 字符）")
+
+
 # ---- User ----
 class ScopeOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)

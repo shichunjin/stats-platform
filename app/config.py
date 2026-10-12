@@ -48,6 +48,9 @@ class Settings(BaseSettings):
     guacamole_url: str = "http://47.117.171.130:8080/guacamole/#/client/"
     # Guacamole 中通用 RDP 连接的 ID（用户在 Windows 内通过桌面快捷方式启动软件）
     guacamole_connection_id: str = "1"
+    # Guacamole JDBC 认证数据库连接串（如 postgresql+psycopg2://guac:***@localhost:5432/guacamole_db）。
+    # 配置后：注册时同步创建 Guacamole 用户（同密码），改密时同步更新；留空则不同步。
+    guac_db_url: str = ""
 
     # 各软件安装路径 (Windows Server 上)
     rstudio_path: str = r"C:\Program Files\RStudio\rstudio.exe"

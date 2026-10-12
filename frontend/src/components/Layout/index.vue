@@ -76,6 +76,7 @@
             </span>
             <template #dropdown>
               <el-dropdown-menu>
+                <el-dropdown-item command="changePwd">修改密码</el-dropdown-item>
                 <el-dropdown-item command="logout">退出登录</el-dropdown-item>
               </el-dropdown-menu>
             </template>
@@ -94,14 +95,37 @@
       </el-main>
     </el-container>
   </el-container>
+
+  <!-- 修改密码对话框：平台与 Guacamole 密码同步修改 -->
+  <el-dialog v-model="pwdDialogVisible" title="修改密码" width="420px" :close-on-click-modal="false">
+    <el-form ref="pwdFormRef" :model="pwdForm" :rules="pwdRules" label-width="80px">
+      <el-form-item label="原密码" prop="old_password">
+        <el-input v-model="pwdForm.old_password" type="password" show-password autocomplete="off" />
+      </el-form-item>
+      <el-form-item label="新密码" prop="new_password">
+        <el-input v-model="pwdForm.new_password" type="password" show-password autocomplete="off" />
+      </el-form-item>
+      <el-form-item label="确认密码" prop="confirm_password">
+        <el-input v-model="pwdForm.confirm_password" type="password" show-password autocomplete="off" />
+      </el-form-item>
+    </el-form>
+    <el-text type="info" size="small">修改后，数据分析平台与 Windows 云桌面（Guacamole）登录密码将同步更新。</el-text>
+    <template #footer>
+      <el-button @click="pwdDialogVisible = false">取消</el-button>
+      <el-button type="primary" :loading="pwdLoading" @click="submitChangePwd">确认修改</el-button>
+    </template>
+  </el-dialog>
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, reactive, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
+import { ElMessage } from 'element-plus'
+import type { FormInstance, FormRules } from 'element-plus'
 import { useUserStore } from '@/stores/user'
 import { useTabsStore } from '@/stores/tabs'
 import { useMessageStore } from '@/stores/messages'
+import { changePassword } from '@/api/auth'
 import type { Message } from '@/types'
 import TabsView from './TabsView.vue'
 
@@ -143,6 +167,43 @@ function onCommand(cmd: string) {
   if (cmd === 'logout') {
     userStore.logout()
     router.push('/login')
+  } else if (cmd === 'changePwd') {
+    pwdForm.old_password = ''
+    pwdForm.new_password = ''
+    pwdForm.confirm_password = ''
+    pwdDialogVisible.value = true
+  }
+}
+
+// ---- 修改密码 ----
+const pwdDialogVisible = ref(false)
+const pwdLoading = ref(false)
+const pwdFormRef = ref<FormInstance>()
+const pwdForm = reactive({ old_password: '', new_password: '', confirm_password: '' })
+const pwdRules: FormRules = {
+  old_password: [{ required: true, message: '请输入原密码', trigger: 'blur' }],
+  new_password: [
+    { required: true, message: '请输入新密码', trigger: 'blur' },
+    { min: 6, max: 64, message: '长度 6-64 个字符', trigger: 'blur' },
+  ],
+  confirm_password: [
+    { required: true, message: '请再次输入新密码', trigger: 'blur' },
+    {
+      validator: (_r, v, cb) => (v === pwdForm.new_password ? cb() : cb(new Error('两次输入的密码不一致'))),
+      trigger: 'blur',
+    },
+  ],
+}
+
+async function submitChangePwd() {
+  await pwdFormRef.value?.validate()
+  pwdLoading.value = true
+  try {
+    const res = await changePassword(pwdForm.old_password, pwdForm.new_password)
+    ElMessage.success(res.message || '密码修改成功')
+    pwdDialogVisible.value = false
+  } finally {
+    pwdLoading.value = false
   }
 }
 

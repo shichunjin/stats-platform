@@ -91,6 +91,11 @@ export default [
     method: 'get',
     response: () => mockUser,
   },
+  {
+    url: '/api/auth/change-password',
+    method: 'post',
+    response: () => ({ message: '密码修改成功，Guacamole 登录密码已同步' }),
+  },
 
   // 会话
   {

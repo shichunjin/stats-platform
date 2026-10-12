@@ -15,3 +15,7 @@ export function register(username: string, password: string, display_name?: stri
 export function getMe() {
   return request.get<unknown, User>('/auth/me')
 }
+
+export function changePassword(old_password: string, new_password: string) {
+  return request.post<unknown, { message: string }>('/auth/change-password', { old_password, new_password })
+}
