@@ -55,20 +55,22 @@ def import_dataset(
     }
 
 
-@router.post("/fetch", summary="获取数据（生成 Excel 并推送到 Windows 云平台）", description="""
-**从业务宽表 test_data 读取数据生成 Excel，并通过 SFTP 推送到 Windows 云主机 C:\\StatsData**
+@router.post("/fetch", summary="获取数据（生成 Excel 并推送到个人 W: 盘）", description="""
+**从业务宽表 test_data 读取数据生成 Excel，并通过 SFTP 推送到当前用户的私有工作区**
 
 - 数据来源：`create_testdata_table.py` 建立的业务宽表（默认表名 `test_data`，可用环境变量覆盖）
-- 所有登录用户获取同一份完整数据（数据权限差异暂不切分此数据集）
-- 文件命名 `{原始名}_{YYYYMMDD_HHmmss}.xlsx`（同秒内重复获取自动追加序号），
+- 每个用户拿到的是自己的一份副本，推送到 `C:\\workspace\\{用户名}\\`（W: 盘根目录），
+  目录与文件的 NTFS 权限在投递时强制收敛为仅本人 / SYSTEM / Administrators，
+  其他 RDP 用户既看不到也无法读取
+- 文件命名 `{原始名}_{YYYYMMDD_HHMMSS}.xlsx`（同秒内重复获取自动追加序号），
   历史文件保留不覆盖；生成的 `.xlsx` 先落到 `fileserver_root/data/`，
   再 SFTP 上传到 Windows
-- 用户连接 Windows 平台后，在 **Z: 盘**即可直接打开使用
+- 用户连接 Windows 平台后，在 **W: 盘**即可直接打开使用
 
 **错误码**
 - `401`：未认证
 - `404`：业务数据表不存在或没有数据列（需先运行 create_testdata_table.py）
-- `502`：SFTP 推送到 Windows 失败（检查 OpenSSH、安全组 22 端口、私钥配置）
+- `502`：SFTP 推送或权限锁定失败（检查 OpenSSH、安全组 22 端口、私钥配置）
 """)
 def fetch_data(
     user: User = Depends(get_current_user),
@@ -96,9 +98,13 @@ def fetch_data(
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"生成 Excel 失败: {str(e)}")
 
-    # SFTP 推送到 Windows 云主机（公共数据目录，Z: 盘），远端沿用同一时间戳文件名
+    # SFTP 推送到当前用户的私有工作区（W: 盘），投递后立即锁定目录与文件为本人私有
+    remote_dir = f"{settings.windows_workspace_dir}/{user.username}"
     try:
-        win_path = upload_file_to_windows(out_path, remote_name=filename)
+        win_path = upload_file_to_windows(
+            out_path, remote_dir=remote_dir, remote_name=filename,
+            lock_owner=user.username,
+        )
     except Exception as e:
         raise HTTPException(
             status_code=502,
@@ -184,10 +190,13 @@ def generate_filtered(
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"生成 Excel 失败: {str(e)}")
 
-    # 2. 推送到目标用户的 Windows 个人工作区（W: 盘根目录）
+    # 2. 推送到目标用户的 Windows 个人工作区（W: 盘根目录），投递后立即锁定为本人私有
     remote_dir = f"{settings.windows_workspace_dir}/{target.username}"
     try:
-        win_path = upload_file_to_windows(out_path, remote_dir=remote_dir, remote_name=filename)
+        win_path = upload_file_to_windows(
+            out_path, remote_dir=remote_dir, remote_name=filename,
+            lock_owner=target.username,
+        )
     except Exception as e:
         raise HTTPException(
             status_code=502,

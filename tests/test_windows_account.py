@@ -8,6 +8,7 @@ from app.config import settings
 from app.models import User
 from app.windows_account import (
     WindowsAccountError,
+    provision_user_workspace,
     sync_windows_user,
     validate_windows_username,
 )
@@ -141,6 +142,20 @@ def test_sync_creates_account_with_expected_script(monkeypatch):
     assert "MemberExists" in inner
     assert "already a member" not in inner
 
+    # 建号同一脚本里必须开通私有工作区并锁定 ACL（数据隔离强约束）
+    assert "$workspaceRoot = 'C:\\workspace'" in inner
+    assert "$pendingRoot   = 'C:\\pending'" in inner
+    assert "New-SmbShare" in inner
+    assert "FolderEnumerationMode AccessBased" in inner
+    assert "icacls" in inner and "/inheritance:r" in inner
+    # SYSTEM / Administrators 用 SID，不能依赖中文版本地化名
+    assert "*S-1-5-18" in inner and "*S-1-5-32-544" in inner
+    # 私有目录按用户名建，不能再用数字 ID
+    assert "Join-Path $workspaceRoot $username" in inner
+    assert "STATS_WINDOWS_WORKSPACE_READY" in inner
+    # 建号路径不递归重置（目录是新建的，空目录）
+    assert "$deepReset     = $false" in inner
+
 
 def test_sync_remote_nonzero_exit_raises(monkeypatch):
     monkeypatch.setattr(settings, "windows_account_sync", True)
@@ -165,6 +180,71 @@ def test_sync_password_control_char_rejected(monkeypatch):
     monkeypatch.setattr(settings, "windows_account_sync", True)
     with pytest.raises(WindowsAccountError, match="控制字符"):
         sync_windows_user("alice", "bad\npassword")
+
+
+# ---- 单元测试：老账号私有工作区补偿 ----
+
+def test_provision_disabled_skips_ssh(monkeypatch):
+    monkeypatch.setattr(settings, "windows_account_sync", False)
+    fake = FakeSSH()
+    monkeypatch.setattr(wa, "connect_ssh", fake)
+
+    assert provision_user_workspace("alice") is False
+    assert fake.calls == []
+
+
+def test_provision_workspace_folder_only_script(monkeypatch):
+    """补偿脚本不需要密码，且不应触碰账号本身。"""
+    monkeypatch.setattr(settings, "windows_account_sync", True)
+    fake = FakeSSH(out="STATS_WINDOWS_WORKSPACE_READY")
+    monkeypatch.setattr(wa, "connect_ssh", fake)
+
+    assert provision_user_workspace("alice") is True
+    assert len(fake.calls) == 1
+    inner = _decode_payload(fake.calls[0][1].script)
+
+    assert "$username = 'alice'" in inner
+    assert "New-LocalUser" not in inner
+    assert "Set-LocalUser" not in inner
+    assert "ConvertTo-SecureString" not in inner
+    assert "icacls" in inner
+    # 授权串按 $username 拼接，避免任何形式的硬编码他人账号
+    assert "$userGrant = $username + ':(OI)(CI)F'" in inner
+    assert "$deepReset     = $false" in inner
+    # 递归重置逻辑必须由开关守护，浅模式下不触发
+    assert "if ($deepReset -and" in inner
+    assert "STATS_WINDOWS_WORKSPACE_READY" in inner
+
+
+def test_provision_deep_reset_enables_recursion(monkeypatch):
+    monkeypatch.setattr(settings, "windows_account_sync", True)
+    fake = FakeSSH(out="STATS_WINDOWS_WORKSPACE_READY")
+    monkeypatch.setattr(wa, "connect_ssh", fake)
+
+    provision_user_workspace("alice", deep_reset=True)
+    inner = _decode_payload(fake.calls[0][1].script)
+    assert "$deepReset     = $true" in inner
+    assert "/T /C" in inner
+
+
+def test_provision_invalid_username_rejected(monkeypatch):
+    monkeypatch.setattr(settings, "windows_account_sync", True)
+    fake = FakeSSH()
+    monkeypatch.setattr(wa, "connect_ssh", fake)
+
+    with pytest.raises(WindowsAccountError):
+        provision_user_workspace("../evil")
+    assert fake.calls == []
+
+
+def test_provision_remote_failure_raises(monkeypatch):
+    monkeypatch.setattr(settings, "windows_account_sync", True)
+    fake = FakeSSH(exit_code=1, err="icacls: 拒绝访问")
+    monkeypatch.setattr(wa, "connect_ssh", fake)
+
+    with pytest.raises(WindowsAccountError, match="保障工作区"):
+        provision_user_workspace("alice")
+    assert fake.closed
 
 
 def test_decode_remote_gbk_fallback():

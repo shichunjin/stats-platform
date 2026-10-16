@@ -39,8 +39,10 @@ class Settings(BaseSettings):
     sftp_passphrase: str = ""
     # Windows 上的目标目录（SFTP 路径用正斜杠）
     windows_data_dir: str = "C:/StatsData"
-    # 用户工作区根目录（管理员按申请生成的数据推送到 {该目录}/{用户名}/，对应用户的 W: 盘）
+    # 用户工作区根目录（获取数据/筛选生成的数据推送到 {该目录}/{用户名}/，对应用户的 W: 盘）
     windows_workspace_dir: str = "C:/workspace"
+    # 用户结果暂存根目录（{该目录}/{用户名}/，对应 pending 共享），同样按用户私有隔离
+    windows_pending_dir: str = "C:/pending"
 
     # 注册/改密时是否经 SSH 在 Windows 云主机同步创建/更新同名本地账号
     # （复用 SFTP 的主机与免密私钥；本地开发可设 WINDOWS_ACCOUNT_SYNC=false 关闭）

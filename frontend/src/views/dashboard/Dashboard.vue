@@ -83,7 +83,7 @@ async function fetch() {
   fetching.value = true
   try {
     const res = await fetchData()
-    ElMessage.success(`数据已生成：${res.filename}（${res.rows} 行 × ${res.columns} 列）`)
+    ElMessage.success(`数据已生成：${res.filename}（${res.rows} 行 × ${res.columns} 列），请在 Windows 平台 W: 盘打开`)
   } catch {
     /* 拦截器处理 */
   } finally {

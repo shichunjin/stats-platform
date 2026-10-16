@@ -2,75 +2,78 @@
 .SYNOPSIS
     Stats platform - Windows user login script
 .DESCRIPTION
-    Maps Z: (read-only raw data) and W: (writable workspace) based on user info,
-    sets software environment variables, creates desktop shortcuts,
-    and configures folder permissions.
+    Maps W: (private, writable workspace keyed by the Windows/平台用户名) and
+    optionally re-asserts the user's private folder ACLs, sets software
+    environment variables, creates desktop shortcuts, and launches software.
+
+    目录约定（必须与后端 app/config.py 一致）：
+      W:      -> \\127.0.0.1\workspace\<用户名>   (C:\workspace\<用户名>)
+      pending -> \\127.0.0.1\pending\<用户名>     (C:\pending\<用户名>)
+    私有目录由后端在注册/投递数据时创建并锁定 ACL，本脚本不再在共享根下建目录
+    （普通用户也无权在共享根创建目录）。
+
+    所有参数均可选：不传入时直接使用当前登录的 Windows 账号名；
+    账号名与平台用户名一致（注册时三端同步）。
 .NOTES
-    Runs as a user login script on Windows Server 2022 (via RDS session startup script).
+    Runs as a user login script on Windows Server 2022 (via RDS session startup).
 #>
 
 param(
-    [Parameter(Mandatory=$true)][string]$Username,
-    [Parameter(Mandatory=$true)][int]$UserId,
-    [Parameter(Mandatory=$true)][int]$DeptId,
-    [Parameter(Mandatory=$true)][string]$Software,
+    [string]$Username = "",
+    [int]$UserId = 0,
+    [int]$DeptId = 0,
+    [string]$Software = "",
     [string]$GuacId = ""
 )
 
 $ErrorActionPreference = "Stop"
 
+if (-not $Username) { $Username = $env:USERNAME }
+
 # ============================================================
 # Path constants
 # ============================================================
 $FileServer = "\\127.0.0.1"
-$DataRoot     = "$FileServer\data"
 $WorkspaceRoot = "$FileServer\workspace"
-$PendingRoot  = "$FileServer\pending"
+$PendingRoot   = "$FileServer\pending"
 
 $ZDrive = "Z:"
 $WDrive = "W:"
 
-# User workspace
-$UserWorkspace = "$WorkspaceRoot\$UserId"
-# Pending review directory
-$UserPending = "$PendingRoot\$UserId"
-# Raw data directory (mapped by dept_id; scope_code can be fetched from platform API)
-$UserScopeDir = "$DataRoot\dept_$DeptId"
+# 私有目录一律按用户名（与后端 C:\workspace\{用户名} 对齐；不能再用数字 UserId）
+$UserWorkspace = "$WorkspaceRoot\$Username"
+$UserPending   = "$PendingRoot\$Username"
 
 # ============================================================
-# 1. Create user workspace directories
-# ============================================================
-if (-not (Test-Path $UserWorkspace)) {
-    New-Item -Path $UserWorkspace -ItemType Directory -Force | Out-Null
-}
-if (-not (Test-Path $UserPending)) {
-    New-Item -Path $UserPending -ItemType Directory -Force | Out-Null
-}
-
-# ============================================================
-# 2. Map network drives
+# 1. Map network drives
 # ============================================================
 # Z: is mapped by the public startup script (map-z-drive.cmd -> \\127.0.0.1\StatsData,
 # the shared public dataset). Do NOT touch Z: here to avoid fighting that mapping.
 
-# W: -> user workspace (writable, PRIVATE per user)
-if (Test-Path $WDrive) { net use $WDrive /delete /y }
-net use $WDrive $UserWorkspace /persistent:no
+# W: -> user workspace (writable, PRIVATE per user). Backend pre-creates and
+# locks the folder; map only when it exists.
+if (Test-Path $UserWorkspace) {
+    if (Test-Path $WDrive) { net use $WDrive /delete /y | Out-Null }
+    net use $WDrive $UserWorkspace /persistent:no | Out-Null
+} else {
+    Write-Warning "私有工作区不存在（后端尚未开通？）: $UserWorkspace"
+}
 
 # ============================================================
-# 3. Set folder permissions (W: strictly private per user)
+# 2. Re-assert folder permissions (W: strictly private per user)
 # ============================================================
-# Strip inherited permissions so other users can never read this
-# user's workspace, then grant only: current user, SYSTEM, Administrators.
-icacls $UserWorkspace /inheritance:r | Out-Null
-icacls $UserWorkspace /grant "$($env:USERNAME):(OI)(CI)F" "SYSTEM:(OI)(CI)F" "Administrators:(OI)(CI)F" | Out-Null
-
-# Pending (results output) directory: same strict isolation
-icacls $UserPending /inheritance:r | Out-Null
-icacls $UserPending /grant "$($env:USERNAME):(OI)(CI)F" "SYSTEM:(OI)(CI)F" "Administrators:(OI)(CI)F" | Out-Null
+# 后端在注册/投递时已锁定；这里做幂等兜底。
+# SYSTEM/Administrators 使用 SID 形式，避免中文版系统名称本地化问题。
+function Lock-PrivateFolder($path) {
+    if (-not (Test-Path $path)) { return }
+    icacls $path /inheritance:r | Out-Null
+    icacls $path /grant "${Username}:(OI)(CI)F" "*S-1-5-18:(OI)(CI)F" "*S-1-5-32-544:(OI)(CI)F" | Out-Null
+}
+Lock-PrivateFolder $UserWorkspace
+Lock-PrivateFolder $UserPending
 
 # ============================================================
-# 4. Write registry/environment variables: software working directories
+# 3. Set registry/environment variables: software working directories
 # ============================================================
 # RStudio
 [Environment]::SetEnvironmentVariable("RSTUDIO_HOME", $WDrive, "User")
@@ -87,10 +90,12 @@ icacls $UserPending /grant "$($env:USERNAME):(OI)(CI)F" "SYSTEM:(OI)(CI)F" "Admi
 
 # Common: result output directory
 [Environment]::SetEnvironmentVariable("RESULTS_DIR", $UserPending, "User")
-[Environment]::SetEnvironmentVariable("USER_ID", $UserId, "User")
+if ($UserId -gt 0) {
+    [Environment]::SetEnvironmentVariable("USER_ID", $UserId, "User")
+}
 
 # ============================================================
-# 5. Create desktop shortcuts
+# 4. Create desktop shortcuts
 # ============================================================
 $Desktop = [Environment]::GetFolderPath("Desktop")
 $Shell = New-Object -ComObject WScript.Shell
@@ -138,18 +143,22 @@ $shortcut.Description = "打开我的数据工作目录 (W:)"
 $shortcut.Save()
 
 # ============================================================
-# 6. Disable RDP clipboard and local drive redirection (registry)
+# 5. RDP 剪贴板/本地盘重定向策略（需要管理员；由 configure-rds.ps1 统一下发，
+#    普通用户登录时写 HKLM 会失败，这里静默跳过）
 # ============================================================
-# Disable clipboard redirection (remote to local)
-$TSConfigPath = "HKLM:\SOFTWARE\Policies\Microsoft\Windows NT\Terminal Services"
-if (-not (Test-Path $TSConfigPath)) {
-    New-Item -Path $TSConfigPath -Force | Out-Null
+try {
+    $TSConfigPath = "HKLM:\SOFTWARE\Policies\Microsoft\Windows NT\Terminal Services"
+    if (-not (Test-Path $TSConfigPath)) {
+        New-Item -Path $TSConfigPath -Force -ErrorAction Stop | Out-Null
+    }
+    Set-ItemProperty -Path $TSConfigPath -Name "fDisableClip" -Value 1 -Type DWord -ErrorAction Stop
+    Set-ItemProperty -Path $TSConfigPath -Name "fDisableCdm" -Value 1 -Type DWord -ErrorAction Stop
+} catch {
+    # 非管理员会话：策略已在机器级由 configure-rds.ps1 配置，忽略
 }
-Set-ItemProperty -Path $TSConfigPath -Name "fDisableClip" -Value 1 -Type DWord
-Set-ItemProperty -Path $TSConfigPath -Name "fDisableCdm" -Value 1 -Type DWord
 
 # ============================================================
-# 7. Launch the specified software
+# 6. Launch the specified software
 # ============================================================
 if ($Software -and $SoftwareConfigs.ContainsKey($Software.ToLower())) {
     $cfg = $SoftwareConfigs[$Software.ToLower()]
@@ -164,6 +173,6 @@ if ($Software -and $SoftwareConfigs.ContainsKey($Software.ToLower())) {
 Write-Host "========================================"
 Write-Host "User $Username login environment initialized"
 Write-Host "  Z: (public dataset, read-only) = \\127.0.0.1\StatsData"
-Write-Host "  W: (workspace, writable) = $UserWorkspace"
-Write-Host "  Result output directory = $UserPending"
+Write-Host "  W: (workspace, private)        = $UserWorkspace"
+Write-Host "  Result output directory        = $UserPending"
 Write-Host "========================================"

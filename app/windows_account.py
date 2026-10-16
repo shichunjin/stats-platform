@@ -1,193 +1,264 @@
-"""Windows 云主机本地账号同步
+"""Windows 云主机账号同步：注册/改密时经 SSH 在 Windows 上创建同名本地账号。
 
-平台注册 / 修改密码时，经 OpenSSH（与 SFTP 同一套 Administrator 免密私钥）
-在 Windows 云主机上创建或更新同名本地账号，使三端账号体系保持一致：
-
-    平台账号 == Guacamole 账号 == Windows 本地账号（同名同密码）
-
-Guacamole 专属 RDP 连接开启了 RDP 自动登录，因此 Windows 账号存在且密码
-一致时，用户浏览器一键即可进入属于自己的云桌面，由 NTFS ACL / 登录脚本
-按用户名落实数据隔离。
-
-安全要点：
-- 密码通过 SSH 加密通道写入 PowerShell 的 **stdin**，不出现在远端进程
-  命令行、计划任务或命令历史中；
-- 用户名做白名单校验（Windows 账号命名规则），杜绝命令注入；
-- PowerShell 单引号字符串中的单引号按 PS 规则转义为两个单引号。
+同步内容（同一段幂等的远程 PowerShell 脚本，一次 SSH 调用完成）：
+  1. 本地账号存在性（New-LocalUser / Set-LocalUser）
+  2. 加入 Users、Remote Desktop Users 组（语言无关，按 SID 找组、按错误码判重）
+  3. 用户私有目录 C:\\workspace\\{用户}、C:\\pending\\{用户}：
+     断开继承并把 NTFS ACL 收敛为「仅本人 / SYSTEM / Administrators」，
+     同时确保 workspace / pending 两个 SMB 共享存在且开启基于访问的枚举（ABE），
+     使其他 RDP 用户看不到、也打不开他人的私有目录。
 """
 import base64
-import logging
 import re
 
-from app.config import settings
-from app.transfer import connect_ssh
+from .config import settings
+from .transfer import connect_ssh
 
-logger = logging.getLogger("stats-platform")
+# Windows 本地账号规则：与平台用户名一致（同步前平台已校验），这里再做硬约束。
+# 3~20 位，字母/数字/点/下划线/连字符；字母开头（避免纯数字或与设备名混淆）。
+_WINDOWS_USERNAME_RE = re.compile(r"^[A-Za-z][A-Za-z0-9._-]{2,19}$")
 
-# Windows 本地账号命名规则：
-# - 长度 1-20（这里平台侧限制 3-20）
-# - 只允许字母数字与 . _ -
-# - 不得包含 " / \ [ ] : ; | = , + * ? < > @ 及空格（白名单天然排除）
-WINDOWS_USERNAME_RE = re.compile(r"^[A-Za-z0-9._-]{3,20}$")
-
-# 远程执行的 PowerShell 脚本。{username}/{password} 为单引号安全转义后的占位。
-# 关键点：
-# - 组名通过内置 SID 翻译，兼容中文/英文 Windows（远程桌面用户 S-1-5-32-555、
-#   普通用户 Users S-1-5-32-545），不依赖本地化组名字面量；
-# - 新用户必须显式加入 Users 组（New-LocalUser 不会自动加入）；
-# - 加组前先做成员预检，兜底再按错误码 MemberExists 判定，均为语言无关，
-#   中文系统下"已是组成员"不会再中断脚本；
-# - 全部操作幂等，重复执行安全（重试友好）。
-_PS_SCRIPT = r"""
-$ErrorActionPreference = 'Stop'
-$username = '{username}'
-$password = '{password}'
-$secure = ConvertTo-SecureString -String $password -AsPlainText -Force
-
-$existing = Get-LocalUser -Name $username -ErrorAction SilentlyContinue
-if ($existing) {
-    Set-LocalUser -Name $username -Password $secure
-    Enable-LocalUser -Name $username
-    $action = 'updated'
-} else {
-    New-LocalUser -Name $username -Password $secure -FullName $username `
-        -Description 'Stats Platform user' -PasswordNeverExpires -AccountNeverExpires | Out-Null
-    $action = 'created'
-}
-
-# 语言无关地确保组成员关系：先预检，异常时再按错误码 MemberExists 判定
-# （不能匹配本地化的报错文本，中文版是"已经是...组的成员"）
-function Ensure-GroupMember($sid, $member) {
-    $group = (New-Object System.Security.Principal.SecurityIdentifier($sid)).Translate([System.Security.Principal.NTAccount]).Value.Split('\')[-1]
-    $isMember = $false
-    try {
-        $found = Get-LocalGroupMember -Group $group -Member $member -ErrorAction Stop
-        if ($found) { $isMember = $true }
-    } catch {
-        $isMember = $false
-    }
-    if (-not $isMember) {
-        try {
-            Add-LocalGroupMember -Group $group -Member $member -ErrorAction Stop
-        } catch {
-            if ($_.FullyQualifiedErrorId -notlike 'MemberExists*') { throw }
-        }
-    }
-}
-
-# Users 组（S-1-5-32-545）与 Remote Desktop Users 组（S-1-5-32-555）
-Ensure-GroupMember 'S-1-5-32-545' $username
-Ensure-GroupMember 'S-1-5-32-555' $username
-
-Write-Output ("STATS_WINDOWS_USER_" + $action.ToUpper())
-""".strip()
+# 内置组 SID（语言无关；不能依赖中文版"远程桌面用户"等本地化名称）
+_SID_USERS = "S-1-5-32-545"
+_SID_REMOTE_DESKTOP_USERS = "S-1-5-32-555"
+_SID_SYSTEM = "*S-1-5-18"
+_SID_ADMINISTRATORS = "*S-1-5-32-544"
 
 
-class WindowsAccountError(RuntimeError):
-    """Windows 账号同步失败（连接/命名/密码策略/远端执行错误）"""
-
-
-def windows_sync_enabled() -> bool:
-    """是否启用 Windows 账号同步"""
-    return settings.windows_account_sync
+class WindowsAccountError(Exception):
+    """Windows 账号同步失败"""
 
 
 def validate_windows_username(username: str) -> None:
-    """校验用户名是否可作为 Windows 本地账号名，不合法抛 WindowsAccountError"""
-    if not WINDOWS_USERNAME_RE.fullmatch(username or ""):
+    if not isinstance(username, str) or not _WINDOWS_USERNAME_RE.match(username):
         raise WindowsAccountError(
-            f"用户名 '{username}' 不符合 Windows 账号规则："
-            "需为 3-20 位字母、数字或 . _ -，且不能含空格与特殊字符"
+            "Windows 用户名需为 3~20 位、字母开头，仅允许字母、数字、点、下划线和连字符"
         )
 
 
 def _ps_quote(value: str) -> str:
-    """转义为 PowerShell 单引号字符串安全内容（' -> ''），拒绝控制字符"""
-    if any(ord(ch) < 0x20 for ch in value):
-        raise WindowsAccountError("密码包含非法控制字符")
-    return value.replace("'", "''")
+    """把任意字符串安全地放进 PowerShell 单引号字符串。"""
+    return "'" + value.replace("'", "''") + "'"
 
 
-def _build_script(username: str, password: str) -> str:
-    """生成实际执行的 PowerShell 脚本（UTF-16LE Base64 解码后执行的载荷）"""
-    validate_windows_username(username)
-    # 用 replace 而不是 str.format：脚本里的 PowerShell 花括号不能被格式化引擎解释
-    return _PS_SCRIPT.replace("'{username}'", f"'{username}'").replace(
-        "'{password}'", f"'{_ps_quote(password)}'"
+def _win_path(value: str) -> str:
+    """settings 里的 SFTP 风格正斜杠路径转成 Windows 反斜杠路径。"""
+    return value.replace("/", "\\").rstrip("\\").replace("'", "''")
+
+
+def _decode_remote(data: bytes) -> str:
+    """中文版 Windows 的错误输出通常是 GBK，做一次兜底解码。"""
+    for enc in ("utf-8", "gbk", "latin-1"):
+        try:
+            return data.decode(enc)
+        except UnicodeDecodeError:
+            continue
+    return repr(data)
+
+
+# ---- 账号部分 ----
+_PS_SCRIPT = r"""
+$ErrorActionPreference = 'Stop'
+
+$username = {username}
+$password = {password}
+
+function Ensure-GroupMember($groupSid, $accountName) {
+    try {
+        $group = New-Object System.Security.Principal.SecurityIdentifier($groupSid)
+        $groupName = $group.Translate([System.Security.Principal.NTAccount]).Value
+        $domain, $name = $groupName -split '\\', 2
+        if ($domain) { $groupName = $name }
+        $members = Get-LocalGroupMember -SID $groupSid -ErrorAction Stop
+        $exists = $false
+        foreach ($m in $members) {
+            $short = ($m.Name -split '\\', 2)[-1]
+            if ($short -eq $accountName) { $exists = $true; break }
+        }
+        if (-not $exists) {
+            Add-LocalGroupMember -SID $groupSid -Member $accountName -ErrorAction Stop
+        }
+    }
+    catch {
+        $fqe = $_.FullyQualifiedErrorId
+        if ($fqe -like 'MemberExists*') {
+            # 已在组中（并发预检与添加之间被其他调用抢先），幂等视为成功
+        } else {
+            throw
+        }
+    }
+}
+
+$secure = ConvertTo-SecureString $password -AsPlainText -Force
+$existing = Get-LocalUser -Name $username -ErrorAction SilentlyContinue
+if ($null -eq $existing) {
+    New-LocalUser -Name $username -Password $secure -FullName $username `
+        -Description 'stats-platform' -AccountNeverExpires -PasswordNeverExpires `
+        -ErrorAction Stop | Out-Null
+    Write-Output 'STATS_WINDOWS_USER_CREATED'
+} else {
+    Set-LocalUser -Name $username -Password $secure -ErrorAction Stop
+    Write-Output 'STATS_WINDOWS_USER_UPDATED'
+}
+
+Ensure-GroupMember '{sid_users}' $username
+Ensure-GroupMember '{sid_rdp}' $username
+""".lstrip()
+
+
+# ---- 私有工作区部分（workspace = W: 盘，pending = 结果暂存）----
+# 与建号脚本分开定义，便于老账号在不知道密码的情况下单独补偿。
+_WORKSPACE_PS = r"""
+$ErrorActionPreference = 'Stop'
+$username = {username}
+$workspaceRoot = {workspace_root}
+$pendingRoot   = {pending_root}
+$deepReset     = {deep_reset}
+
+function Ensure-Share($name, $path) {
+    if (-not (Get-SmbShare -Name $name -ErrorAction SilentlyContinue)) {
+        New-SmbShare -Name $name -Path $path `
+            -ChangeAccess 'Remote Desktop Users' -FullAccess 'Administrators' | Out-Null
+    }
+    # 基于访问的枚举：共享根下只显示当前用户有 NTFS 权限的目录
+    Set-SmbShare -Name $name -FolderEnumerationMode AccessBased -Force
+}
+
+foreach ($root in @($workspaceRoot, $pendingRoot)) {
+    if (-not (Test-Path -LiteralPath $root)) {
+        New-Item -ItemType Directory -Path $root -Force | Out-Null
+    }
+}
+Ensure-Share 'workspace' $workspaceRoot
+Ensure-Share 'pending'   $pendingRoot
+
+$userGrant = $username + ':(OI)(CI)F'
+foreach ($d in @((Join-Path $workspaceRoot $username), (Join-Path $pendingRoot $username))) {
+    if (-not (Test-Path -LiteralPath $d)) {
+        New-Item -ItemType Directory -Path $d -Force | Out-Null
+    }
+    # 断开继承、删除继承来的 ACE，只保留本人 / SYSTEM / Administrators
+    icacls $d /inheritance:r /grant $userGrant '{sid_system}:(OI)(CI)F' '{sid_admins}:(OI)(CI)F' | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw ('icacls failed: ' + $d) }
+    # 补偿老目录时，把已存在的历史文件一并重新锁定（新注册用户目录为空，跳过）
+    if ($deepReset -and (Get-ChildItem -LiteralPath $d -Force -ErrorAction SilentlyContinue)) {
+        icacls (Join-Path $d '*') /T /C /inheritance:r /grant $userGrant `
+            '{sid_system}:(OI)(CI)F' '{sid_admins}:(OI)(CI)F' | Out-Null
+        if ($LASTEXITCODE -ne 0) { throw ('icacls deep reset failed: ' + $d) }
+    }
+}
+Write-Output 'STATS_WINDOWS_WORKSPACE_READY'
+""".lstrip()
+
+
+def _fill(template: str, **values: str) -> str:
+    """按 {name} 占位符做纯文本替换。
+
+    不能用 str.format：PowerShell 脚本里大量 `{ }` 脚本块会被误判为格式字段。
+    """
+    for key, value in values.items():
+        template = template.replace("{" + key + "}", value)
+    return template
+
+
+def _build_account_script(username: str, password: str) -> str:
+    workspace = _build_workspace_script(username, deep_reset=False)
+    return (
+        _fill(
+            _PS_SCRIPT,
+            username=_ps_quote(username),
+            password=_ps_quote(password),
+            sid_users=_SID_USERS,
+            sid_rdp=_SID_REMOTE_DESKTOP_USERS,
+        )
+        + "\n"
+        + workspace
     )
 
 
-def _build_stdin_payload(inner_script: str) -> str:
-    """把载荷包装成纯 ASCII 的 stdin 脚本：Base64(UTF-16LE 脚本) 解码后执行。
+def _build_workspace_script(username: str, deep_reset: bool) -> str:
+    return _fill(
+        _WORKSPACE_PS,
+        username=_ps_quote(username),
+        workspace_root=_ps_quote(_win_path(settings.windows_workspace_dir)),
+        pending_root=_ps_quote(_win_path(settings.windows_pending_dir)),
+        deep_reset="$true" if deep_reset else "$false",
+        sid_system=_SID_SYSTEM,
+        sid_admins=_SID_ADMINISTRATORS,
+    )
 
-    这样可以绕开中文 Windows 下 stdin 默认 GBK 代码页导致的非 ASCII 密码乱码，
-    密码也不会出现在远端进程命令行中。
+
+def _run_remote_ps(inner_script: str, action: str, username: str) -> None:
+    """在 Windows 上经 SSH 执行一段 PowerShell。
+
+    传输方式：powershell -Command - 从 stdin 读命令（绕开命令行长度限制与代码页问题）；
+    实际脚本以 UTF-16LE Base64 载荷嵌在 ASCII 包装器里（中文系统 GBK 代码页安全）。
     """
     encoded = base64.b64encode(inner_script.encode("utf-16-le")).decode("ascii")
-    return (
-        "$ErrorActionPreference = 'Stop'\n"
-        # 强制远程输出/错误流为 UTF-8，避免中文 Windows 的 GBK 控制台导致报错乱码
-        "[Console]::OutputEncoding = [System.Text.Encoding]::UTF8\n"
-        "$OutputEncoding = [System.Text.Encoding]::UTF8\n"
-        "$__stats_code = [System.Text.Encoding]::Unicode.GetString("
-        f"[System.Convert]::FromBase64String('{encoded}'))\n"
-        "Invoke-Expression $__stats_code\n"
+    wrapper = (
+        "$__s = [Text.Encoding]::Unicode.GetString("
+        f"[Convert]::FromBase64String('{encoded}')); "
+        "Invoke-Expression $__s"
     )
-
-
-def _decode_remote(raw: bytes) -> str:
-    """远端输出优先按 UTF-8 解码，失败回退 GBK（中文 Windows 旧控制台）"""
-    try:
-        return raw.decode("utf-8")
-    except UnicodeDecodeError:
-        return raw.decode("gbk", "replace")
-
-
-def sync_windows_user(username: str, password: str) -> bool:
-    """在 Windows 云主机上创建账号或重置为指定密码，并保证 RDP 登录权限。
-
-    - 启用同步时执行；未启用直接返回 False；
-    - 幂等：账号已存在则改密+启用，不存在则新建并加入 Users / Remote Desktop Users；
-    - 任何失败抛 :class:`WindowsAccountError`，调用方应整体失败（三端一致）。
-      所有操作均可安全重试。
-    """
-    if not windows_sync_enabled():
-        return False
-
-    inner_script = _build_script(username, password)
-    stdin_payload = _build_stdin_payload(inner_script)
+    command = "powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command -"
 
     try:
         ssh = connect_ssh()
-    except Exception as exc:
-        raise WindowsAccountError(f"无法连接 Windows 云主机执行账号同步: {exc}") from exc
+    except Exception as e:
+        raise WindowsAccountError(f"无法连接 Windows 云主机: {e}") from e
 
     try:
-        # -Command - 让 PowerShell 从 stdin 读取脚本，密码不进入进程命令行
-        stdin, stdout, stderr = ssh.exec_command(
-            "powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command -",
-            timeout=60,
-        )
-        stdin.write(stdin_payload)
-        stdin.flush()
-        stdin.channel.shutdown_write()
+        stdin, stdout, stderr = ssh.exec_command(command, timeout=25)
+        try:
+            stdin.write(wrapper)
+            stdin.flush()
+        finally:
+            stdin.channel.shutdown_write()
 
-        exit_code = stdout.channel.recv_exit_status()
-        out = _decode_remote(stdout.read()).strip()
-        err = _decode_remote(stderr.read()).strip()
-
-        if exit_code != 0:
-            # Windows 常见失败：密码不满足长度/复杂度/历史策略
-            detail = err or out or f"exit code {exit_code}"
-            logger.warning("Windows 账号同步失败 user=%s: %s", username, detail)
-            raise WindowsAccountError(f"Windows 账号同步失败: {detail}")
-
-        logger.info("Windows 账号同步成功 user=%s result=%s", username, out)
-        return True
-    except WindowsAccountError:
-        raise
-    except Exception as exc:  # 网络/SSH 层错误
-        logger.warning("Windows 账号同步异常 user=%s: %s", username, exc)
-        raise WindowsAccountError(f"无法连接 Windows 云主机执行账号同步: {exc}") from exc
+        out = _decode_remote(stdout.read())
+        err = _decode_remote(stderr.read())
+        code = stdin.channel.recv_exit_status()
     finally:
         ssh.close()
+
+    if code != 0:
+        detail = err.strip() or out.strip() or f"exit code {code}"
+        raise WindowsAccountError(
+            f"Windows 账号同步失败（{action} {username}）：{detail[:500]}"
+        )
+
+
+def windows_sync_enabled() -> bool:
+    return bool(settings.windows_account_sync)
+
+
+def sync_windows_user(username: str, password: str) -> bool:
+    """注册/改密后同步：创建或更新 Windows 本地账号，并保障私有工作区。
+
+    返回 True 表示执行了同步；False 表示功能关闭跳过。
+    远端任何失败都抛 WindowsAccountError，由调用方决定回滚。
+    """
+    if not settings.windows_account_sync:
+        return False
+    validate_windows_username(username)
+    if any(ord(c) < 0x20 for c in password):
+        raise WindowsAccountError("密码中不允许包含控制字符")
+
+    script = _build_account_script(username, password)
+    _run_remote_ps(script, "同步账号", username)
+    return True
+
+
+def provision_user_workspace(username: str, deep_reset: bool = False) -> bool:
+    """只为用户开通/修复私有工作区目录与 ACL（不需要密码）。
+
+    供老账号补偿：deep_reset=True 时会递归重置目录内历史文件的权限。
+    返回 True 表示执行了同步；False 表示功能关闭跳过。
+    """
+    if not settings.windows_account_sync:
+        return False
+    validate_windows_username(username)
+
+    script = _build_workspace_script(username, deep_reset=deep_reset)
+    _run_remote_ps(script, "保障工作区", username)
+    return True

@@ -5,10 +5,14 @@
 C:\\ProgramData\\ssh\\administrators_authorized_keys。
 """
 import os
+import re
 
 import paramiko
 
 from app.config import settings
+
+# 与 Windows 本地账号规则保持一致；lock_owner 会进入远程命令，必须白名单校验
+_OWNER_RE = re.compile(r"^[A-Za-z][A-Za-z0-9._-]{2,19}$")
 
 
 def connect_ssh() -> paramiko.SSHClient:
@@ -79,20 +83,48 @@ def _ensure_remote_dir(sftp: paramiko.SFTPClient, remote_dir: str):
             sftp.mkdir(current)
 
 
+def _run_icacls_lock(ssh: paramiko.SSHClient, win_path: str, owner: str,
+                     container: bool) -> None:
+    """断开继承并把 ACL 收敛为 owner 本人 / SYSTEM / Administrators。
+
+    container=True 时加 (OI)(CI) 继承标志（用于目录）；否则锁单个文件。
+    SYSTEM/Administrators 用 SID 形式（*S-1-5-18 / *S-1-5-32-544），
+    在中文版 Windows 上同样生效。
+    """
+    flags = "(OI)(CI)" if container else ""
+    command = (
+        f'icacls "{win_path}" /inheritance:r /grant:r '
+        f'"{owner}:{flags}F" '
+        f'"*S-1-5-18:{flags}F" '
+        f'"*S-1-5-32-544:{flags}F"'
+    )
+    _stdin, stdout, stderr = ssh.exec_command(command, timeout=20)
+    code = stdout.channel.recv_exit_status()
+    if code != 0:
+        err = (stderr.read().decode("gbk", errors="replace")
+               or stdout.read().decode("gbk", errors="replace")).strip()
+        raise RuntimeError(f"私有目录权限锁定失败({win_path})：{err or f'exit {code}'}")
+
+
 def upload_file_to_windows(
     local_path: str,
     remote_dir: str | None = None,
     remote_name: str | None = None,
+    lock_owner: str | None = None,
 ) -> str:
     """把本地文件 SFTP 上传到 Windows 云主机。
 
     - remote_dir：远端目录（不传则使用配置中的公共数据目录），支持子目录，
       不存在会自动递归创建（可用于按用户隔离的目录）
     - remote_name：远端文件名（不传则沿用本地文件名）
-    - 返回 Windows 风格路径（如 C:\\StatsData\\testData.xlsx）
+    - lock_owner：传入用户名后，上传完成会立即把目标目录与文件的 NTFS ACL
+      收敛为仅该用户 / SYSTEM / Administrators（防同机其他 RDP 用户读取）
+    - 返回 Windows 风格路径（如 C:\\workspace\\user1\\testData.xlsx）
     """
     if not os.path.exists(local_path):
         raise FileNotFoundError(f"待上传文件不存在: {local_path}")
+    if lock_owner is not None and not _OWNER_RE.match(lock_owner):
+        raise ValueError(f"非法的 lock_owner: {lock_owner!r}")
 
     filename = remote_name or os.path.basename(local_path)
     target_dir = (remote_dir or settings.windows_data_dir).replace("\\", "/").rstrip("/")
@@ -102,6 +134,11 @@ def upload_file_to_windows(
     try:
         _ensure_remote_dir(sftp, target_dir)
         sftp.put(local_path, remote_path)
+        if lock_owner:
+            win_dir = target_dir.replace("/", "\\")
+            _run_icacls_lock(ssh, win_dir, lock_owner, container=True)
+            _run_icacls_lock(ssh, f"{win_dir}\\{filename}", lock_owner,
+                             container=False)
     finally:
         sftp.close()
         ssh.close()
