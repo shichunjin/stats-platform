@@ -1,4 +1,5 @@
 """FastAPI 入口 — 统计软件托管平台"""
+import logging
 import os
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -8,6 +9,9 @@ from app.routers import auth, session, results, admin, data, messages, applies
 from app.database import Base, engine, SessionLocal
 from app.models import User, Scope, AuditLog
 from app.auth import DEMO_ACCOUNTS, DEMO_USERS
+from app.guac import guac_sync_enabled, upsert_guac_user
+
+logger = logging.getLogger("stats-platform")
 
 # 创建数据库表（生产环境建议用 Alembic 迁移）
 Base.metadata.create_all(bind=engine)
@@ -46,6 +50,15 @@ def _init_demo_data():
         db.commit()
     finally:
         db.close()
+
+    # 启用 Guacamole 同步时，为演示账号补齐 Guacamole 用户与专属连接
+    # （失败只告警不阻断启动，Guacamole 不可用不应拖垮整个平台）
+    if guac_sync_enabled():
+        for username, password in DEMO_USERS.items():
+            try:
+                upsert_guac_user(username, password)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("演示账号 %s 同步 Guacamole 失败: %s", username, exc)
 
 
 _init_demo_data()

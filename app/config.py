@@ -46,11 +46,29 @@ class Settings(BaseSettings):
     rds_host: str = "8.133.223.251"
     rds_port: int = 3389
     guacamole_url: str = "http://47.117.171.130:8080/guacamole/#/client/"
-    # Guacamole 中通用 RDP 连接的 ID（用户在 Windows 内通过桌面快捷方式启动软件）
+    # 兜底共享 RDP 连接 ID：仅在未配置 GUAC_DB_URL（旧 user-mapping 部署）时使用；
+    # 启用 JDBC 同步后每个用户使用各自的专属连接。
     guacamole_connection_id: str = "1"
     # Guacamole JDBC 认证数据库连接串（如 postgresql+psycopg2://guac:***@localhost:5432/guacamole_db）。
-    # 配置后：注册时同步创建 Guacamole 用户（同密码），改密时同步更新；留空则不同步。
+    # 配置后：注册时同步创建 Guacamole 用户（同密码）及其专属 RDP 连接，改密时同步更新；
+    # 留空则不同步（本地开发/测试）。
     guac_db_url: str = ""
+
+    # ---- 一人一专属 RDP 连接（启用 GUAC_DB_URL 时生效） ----
+    # 专属连接名前缀，完整连接名 = 前缀 + 用户名
+    guac_connection_prefix: str = "windows-"
+    # 是否把账号密码写入连接参数实现 RDP 自动登录（要求 Windows 账号与平台账号同名同密码）
+    guac_rdp_auto_login: bool = True
+    # Windows 域名（工作组环境留空）
+    guac_rdp_domain: str = ""
+    # RDP 安全层：nla / tls / rdp；留空让 guacd 自动协商
+    guac_rdp_security: str = "nla"
+    # 忽略 RDP 证书错误（自签证书/按 IP 直连环境建议开启）
+    guac_rdp_ignore_cert: bool = True
+    # guacd 容器内 RDP 虚拟盘根目录，按用户名建子目录隔离浏览器传文件；留空不启用
+    guac_drive_root: str = ""
+    # guacd 容器内会话录像根目录，按用户名建子目录隔离；留空不录像
+    guac_recording_root: str = ""
 
     # 各软件安装路径 (Windows Server 上)
     rstudio_path: str = r"C:\Program Files\RStudio\rstudio.exe"
