@@ -113,7 +113,7 @@ stats-platform/
 
 ## 数据获取与导出流程
 
-**1. 数据获取**：管理员 `POST /data/import` 把 `testData.csv`（GBK 编码，612 列 × 1074 行医学队列数据）解析入库（`dataset_meta` + `dataset_rows`）。用户点「获取数据」→ `POST /data/fetch` 从数据库读全量数据，用 openpyxl 生成 `testData.xlsx` 存到 `fileserver_root/data/`，供用户在 Windows 平台分析使用。
+**1. 数据获取**：管理员 `POST /data/import` 把 `testData.csv`（GBK 编码，612 列 × 1074 行医学队列数据）解析入库（`dataset_meta` + `dataset_rows`）。用户点「获取数据」→ `POST /data/fetch` 从数据库读全量数据，用 openpyxl 生成 `testData_YYYYMMDD_HHmmss.xlsx`（同秒重复获取追加 `_2` 序号，历史文件保留不覆盖）存到 `fileserver_root/data/`，并 SFTP 推送到 Windows 云主机 Z: 盘，供用户在 Windows 平台分析使用。
 
 **2. 导出审核**：普通用户不能直接导出 Windows 平台内的任何数据。用户点「申请导出结果」→ `POST /results/request-export` 扫描其 pending 目录登记申请；管理员在「待审核导出申请」中人工 `approve` / `reject`；审核通过后结果才出现在「已发布」列表供下载。
 

@@ -60,7 +60,9 @@ def import_dataset(
 
 - 数据来源：`create_testdata_table.py` 建立的业务宽表（默认表名 `test_data`，可用环境变量覆盖）
 - 所有登录用户获取同一份完整数据（数据权限差异暂不切分此数据集）
-- 生成的 `.xlsx` 先落到 `fileserver_root/data/`，再 SFTP 上传到 Windows
+- 文件命名 `{原始名}_{YYYYMMDD_HHmmss}.xlsx`（同秒内重复获取自动追加序号），
+  历史文件保留不覆盖；生成的 `.xlsx` 先落到 `fileserver_root/data/`，
+  再 SFTP 上传到 Windows
 - 用户连接 Windows 平台后，在 **Z: 盘**即可直接打开使用
 
 **错误码**
@@ -73,7 +75,19 @@ def fetch_data(
     db: Session = Depends(get_db),
 ):
     out_dir = os.path.join(settings.fileserver_root, "data")
-    out_path = os.path.join(out_dir, f"{settings.dataset_name}.xlsx")
+    os.makedirs(out_dir, exist_ok=True)
+
+    # 时间戳命名，每次获取生成独立文件、不覆盖历史；
+    # 同一秒内重复获取（或时钟极接近）时追加 _2/_3 序号兜底。
+    filename = timestamp_filename(settings.dataset_name)
+    out_path = os.path.join(out_dir, filename)
+    seq = 2
+    while os.path.exists(out_path):
+        filename = timestamp_filename(settings.dataset_name)
+        stem, ext = os.path.splitext(filename)
+        filename = f"{stem}_{seq}{ext}"
+        out_path = os.path.join(out_dir, filename)
+        seq += 1
 
     try:
         rows, columns = generate_excel_from_table(db, settings.testdata_table, out_path)
@@ -82,9 +96,9 @@ def fetch_data(
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"生成 Excel 失败: {str(e)}")
 
-    # SFTP 推送到 Windows 云主机（公共数据目录，Z: 盘）
+    # SFTP 推送到 Windows 云主机（公共数据目录，Z: 盘），远端沿用同一时间戳文件名
     try:
-        win_path = upload_file_to_windows(out_path)
+        win_path = upload_file_to_windows(out_path, remote_name=filename)
     except Exception as e:
         raise HTTPException(
             status_code=502,
@@ -94,13 +108,13 @@ def fetch_data(
     db.add(AuditLog(
         user_id=user.id,
         action="data_fetch",
-        detail=f"获取数据 {settings.dataset_name}.xlsx: {rows} 行, {columns} 列，"
+        detail=f"获取数据 {filename}: {rows} 行, {columns} 列，"
                f"已推送到 Windows {win_path}",
     ))
     db.commit()
 
     return {
-        "filename": f"{settings.dataset_name}.xlsx",
+        "filename": filename,
         "rows": rows,
         "columns": columns,
         "local_path": out_path,
