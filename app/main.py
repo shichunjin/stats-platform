@@ -10,6 +10,7 @@ from app.database import Base, engine, SessionLocal
 from app.models import User, Scope, AuditLog
 from app.auth import DEMO_ACCOUNTS, DEMO_USERS
 from app.guac import guac_sync_enabled, upsert_guac_user
+from app.windows_account import windows_sync_enabled, sync_windows_user
 
 logger = logging.getLogger("stats-platform")
 
@@ -51,10 +52,22 @@ def _init_demo_data():
     finally:
         db.close()
 
-    # 启用 Guacamole 同步时，为演示账号补齐 Guacamole 用户与专属连接
-    # （失败只告警不阻断启动，Guacamole 不可用不应拖垮整个平台）
+    # 启用 Guacamole 同步时，为演示账号补齐 Windows 账号、Guacamole 用户与
+    # 专属连接（失败只告警不阻断启动）。顺序与注册链路一致：先 Windows 后
+    # Guacamole，Windows 失败则跳过本次 Guacamole 更新，避免三端凭据分叉
+    # （每次重启都以 .env 中的演示密码为准做收敛）。
     if guac_sync_enabled():
+        win_sync = windows_sync_enabled()
         for username, password in DEMO_USERS.items():
+            if win_sync:
+                try:
+                    sync_windows_user(username, password)
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning(
+                        "演示账号 %s 同步 Windows 失败，跳过本次 Guacamole 同步: %s",
+                        username, exc,
+                    )
+                    continue
             try:
                 upsert_guac_user(username, password)
             except Exception as exc:  # noqa: BLE001
