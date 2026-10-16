@@ -5,6 +5,7 @@ from app.database import get_db
 from app.models import User, AuditLog
 from app.auth import (
     verify_password, create_access_token, get_current_user, hash_password,
+    validate_password_strength,
     DEMO_ACCOUNTS,
 )
 from app.guac import upsert_guac_user
@@ -21,7 +22,8 @@ router = APIRouter(prefix="/auth", tags=["认证"])
 **用户注册接口**
 
 - 用户名 3-20 位（字母/数字/._-，将同时作为 Windows 云桌面登录账号），不可与已有用户（含演示账号）重名
-- 密码 6-64 字符，使用 pbkdf2_sha256 哈希存储
+- 密码 8-64 字符，须包含大写字母、小写字母、数字、特殊符号中的至少三类，且不能包含用户名；使用 pbkdf2_sha256 哈希存储
+  （与 Windows 云主机密码复杂度策略一致，注册即开通云桌面，无需再改密）
 - 新注册用户角色固定为 `user`，需管理员后续分配数据范围
 - 注册成功后即可用账号密码登录
 - 启用同步时，会同时创建 Windows 云主机本地账号与 Guacamole 同名用户（同密码），
@@ -39,6 +41,12 @@ def register(req: RegisterRequest, db: Session = Depends(get_db)):
     existing = db.query(User).filter(User.username == req.username).first()
     if existing:
         raise HTTPException(status_code=400, detail=f"用户名 '{req.username}' 已被占用")
+
+    # 密码强度前置校验（对齐 Windows 复杂度策略，避免同步到云主机时才被拒）
+    try:
+        validate_password_strength(req.password, req.username)
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
 
     # 外部系统同步顺序：Windows 本地账号 → Guacamole → 平台账号。
     # 三者按用户名幂等，任何一步失败都整体失败（502），平台不产生半完成账号，
@@ -132,7 +140,7 @@ def get_me(user: User = Depends(get_current_user)):
 **修改当前登录用户密码**
 
 - 需校验原密码
-- 新密码 6-64 字符
+- 新密码 8-64 字符，须包含大写字母、小写字母、数字、特殊符号中的至少三类，且不能包含用户名
 - 启用同步时，Windows 云主机本地账号、Guacamole 账号密码同步更新
   （先外部后平台，任一失败平台密码不变，三端始终一致）
 - 演示账号（admin/user1）密码由环境变量管理，不能在线修改
@@ -152,6 +160,12 @@ def change_password(
 
     if not verify_password(user.username, req.old_password, db_user=user):
         raise HTTPException(status_code=400, detail="原密码错误")
+
+    # 新密码强度前置校验（与注册同一套策略，避免同步到云主机时才被拒）
+    try:
+        validate_password_strength(req.new_password, user.username)
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
 
     # 外部系统先改：Windows 本地账号 → Guacamole，全部成功后才改平台密码，
     # 保证三端密码一致；任一步失败，平台密码保持原样。

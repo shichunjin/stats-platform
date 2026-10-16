@@ -17,8 +17,9 @@ class RegisterRequest(BaseModel):
                           pattern=r"^[A-Za-z0-9._-]+$",
                           description="用户名（3-20 位字母、数字或 . _ -，将作为 Windows 登录账号）",
                           examples=["newuser"])
-    password: str = Field(..., min_length=6, max_length=64, description="密码（6-64 字符）",
-                          examples=["newpass123"])
+    password: str = Field(..., min_length=8, max_length=64,
+                          description="密码（8-64 字符，大写/小写/数字/符号至少三类，不含用户名）",
+                          examples=["Newuser@2026"])
     display_name: Optional[str] = Field(None, max_length=128, description="显示名称（可选）",
                                        examples=["张三"])
 
@@ -38,8 +39,8 @@ class RegisterResponse(BaseModel):
 
 class ChangePasswordRequest(BaseModel):
     old_password: str = Field(..., description="原密码")
-    new_password: str = Field(..., min_length=6, max_length=64,
-                              description="新密码（6-64 字符）")
+    new_password: str = Field(..., min_length=8, max_length=64,
+                              description="新密码（8-64 字符，大写/小写/数字/符号至少三类，不含用户名）")
 
 
 # ---- User ----

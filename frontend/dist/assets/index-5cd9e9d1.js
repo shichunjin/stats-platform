@@ -1,0 +1,1 @@
+function i(t,e){return!t||t.length<8||t.length>64?"密码长度必须为 8-64 位":/\s/.test(t)?"密码不能包含空格":[/[a-z]/,/[A-Z]/,/[0-9]/,/[^A-Za-z0-9]/].filter(n=>n.test(t)).length<3?"需包含大写字母、小写字母、数字、特殊符号中的至少三类":e&&e.length>=3&&t.toLowerCase().includes(e.toLowerCase())?"密码不能包含用户名":""}export{i as c};

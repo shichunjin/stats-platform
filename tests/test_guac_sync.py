@@ -112,14 +112,14 @@ def _query_connection(engine, username):
 
 def test_register_creates_dedicated_connection(client, db_session, guac_db):
     resp = client.post("/auth/register", json={
-        "username": "guacuser", "password": "guacpass123", "display_name": "Guac用户",
+        "username": "guacuser", "password": "Guacpass123", "display_name": "Guac用户",
     })
     assert resp.status_code == 200
 
     # guac 账号 + 同密码
     row = _query_guac_user(guac_db, "guacuser")
     assert row is not None, "Guacamole 库中应创建同名用户"
-    assert row[0] == _guac_hash("guacpass123", row[1])
+    assert row[0] == _guac_hash("Guacpass123", row[1])
 
     # 专属连接
     result = _query_connection(guac_db, "guacuser")
@@ -129,14 +129,14 @@ def test_register_creates_dedicated_connection(client, db_session, guac_db):
     assert params["port"] == str(settings.rds_port)
     # RDP 用户名锁定为本人，RDP 密码与平台一致（自动登录）
     assert params["username"] == "guacuser"
-    assert params["password"] == "guacpass123"
+    assert params["password"] == "Guacpass123"
     # 用户只有自己这一条连接的权限
     assert perms == [cid]
 
 
 def test_two_users_have_isolated_connections(client, db_session, guac_db):
-    client.post("/auth/register", json={"username": "alice", "password": "passalice1"})
-    client.post("/auth/register", json={"username": "bob", "password": "passbob222"})
+    client.post("/auth/register", json={"username": "alice", "password": "Aa123456"})
+    client.post("/auth/register", json={"username": "bob", "password": "Bb123456"})
 
     a = _query_connection(guac_db, "alice")
     b = _query_connection(guac_db, "bob")
@@ -146,15 +146,15 @@ def test_two_users_have_isolated_connections(client, db_session, guac_db):
     assert a[2] == [a[0]]
     assert b[2] == [b[0]]
     # 连接参数中的 RDP 身份互不串用
-    assert a[1]["username"] == "alice" and a[1]["password"] == "passalice1"
-    assert b[1]["username"] == "bob" and b[1]["password"] == "passbob222"
+    assert a[1]["username"] == "alice" and a[1]["password"] == "Aa123456"
+    assert b[1]["username"] == "bob" and b[1]["password"] == "Bb123456"
 
 
 def test_register_idempotent_connection_on_rerun(client, db_session, guac_db):
-    client.post("/auth/register", json={"username": "repeat", "password": "pass123456"})
+    client.post("/auth/register", json={"username": "repeat", "password": "Aa123456"})
     # 再次直接调用同步（模拟改密），连接不应重复创建
     from app.guac import upsert_guac_user
-    upsert_guac_user("repeat", "newpass789")
+    upsert_guac_user("repeat", "Newpass789")
     with guac_db.connect() as conn:
         count = conn.execute(
             text("SELECT COUNT(*) FROM guacamole_connection WHERE connection_name = :n"),
@@ -165,7 +165,7 @@ def test_register_idempotent_connection_on_rerun(client, db_session, guac_db):
 
 def test_auto_login_disabled_omits_credentials(client, db_session, guac_db, monkeypatch):
     monkeypatch.setattr(settings, "guac_rdp_auto_login", False)
-    client.post("/auth/register", json={"username": "manual", "password": "pass123456"})
+    client.post("/auth/register", json={"username": "manual", "password": "Mm123456"})
     _, params, _ = _query_connection(guac_db, "manual")
     assert "username" not in params and "password" not in params
     assert params["hostname"] == settings.rds_host
@@ -174,7 +174,7 @@ def test_auto_login_disabled_omits_credentials(client, db_session, guac_db, monk
 def test_drive_and_recording_paths_isolated_per_user(client, db_session, guac_db, monkeypatch):
     monkeypatch.setattr(settings, "guac_drive_root", "/guacd/drives")
     monkeypatch.setattr(settings, "guac_recording_root", "/guacd/records")
-    client.post("/auth/register", json={"username": "iso", "password": "pass123456"})
+    client.post("/auth/register", json={"username": "iso", "password": "Ii123456"})
     _, params, _ = _query_connection(guac_db, "iso")
     assert params["drive-path"] == "/guacd/drives/iso"
     assert params["recording-path"] == "/guacd/records/iso"
@@ -184,14 +184,14 @@ def test_drive_and_recording_paths_isolated_per_user(client, db_session, guac_db
 
 def test_register_skips_guac_when_not_configured(client, db_session, monkeypatch):
     monkeypatch.setattr(settings, "guac_db_url", "")
-    resp = client.post("/auth/register", json={"username": "plainuser", "password": "pass123"})
+    resp = client.post("/auth/register", json={"username": "plainuser", "password": "Pp123456"})
     assert resp.status_code == 200
 
 
 def test_register_fails_when_guac_sync_fails(client, db_session, monkeypatch):
     """guac 同步失败 → 注册 502，平台不创建用户"""
     monkeypatch.setattr(settings, "guac_db_url", "sqlite:////nonexistent_dir_xyz/guac.db")
-    resp = client.post("/auth/register", json={"username": "failuser", "password": "pass123"})
+    resp = client.post("/auth/register", json={"username": "failuser", "password": "Ff123456"})
     assert resp.status_code == 502
     assert "Guacamole" in resp.json()["detail"]
     assert db_session.query(User).filter(User.username == "failuser").first() is None
@@ -199,7 +199,7 @@ def test_register_fails_when_guac_sync_fails(client, db_session, monkeypatch):
 
 # ---------- 修改密码 ----------
 
-def _register_and_login(client, username="pwduser", password="oldpass123"):
+def _register_and_login(client, username="pwduser", password="Oldpass123"):
     client.post("/auth/register", json={"username": username, "password": password})
     resp = client.post("/auth/login", json={"username": username, "password": password})
     assert resp.status_code == 200
@@ -210,32 +210,32 @@ def test_change_password_syncs_both_sides(client, db_session, guac_db):
     headers = _register_and_login(client)
 
     resp = client.post("/auth/change-password",
-                       json={"old_password": "oldpass123", "new_password": "newpass456"},
+                       json={"old_password": "Oldpass123", "new_password": "Newpass456"},
                        headers=headers)
     assert resp.status_code == 200
 
     # 平台侧：新密码 hash 生效，旧密码失效
     user = db_session.query(User).filter(User.username == "pwduser").first()
-    assert verify_password_hash("newpass456", user.password_hash)
-    assert not verify_password_hash("oldpass123", user.password_hash)
+    assert verify_password_hash("Newpass456", user.password_hash)
+    assert not verify_password_hash("Oldpass123", user.password_hash)
 
     # guac 侧：哈希同步更新
     row = _query_guac_user(guac_db, "pwduser")
-    assert row[0] == _guac_hash("newpass456", row[1])
+    assert row[0] == _guac_hash("Newpass456", row[1])
 
     # 专属连接参数中的 RDP 密码也同步更新
     _, params, _ = _query_connection(guac_db, "pwduser")
-    assert params["password"] == "newpass456"
+    assert params["password"] == "Newpass456"
 
     # 登录验证：旧密码 401，新密码 200
-    assert client.post("/auth/login", json={"username": "pwduser", "password": "oldpass123"}).status_code == 401
-    assert client.post("/auth/login", json={"username": "pwduser", "password": "newpass456"}).status_code == 200
+    assert client.post("/auth/login", json={"username": "pwduser", "password": "Oldpass123"}).status_code == 401
+    assert client.post("/auth/login", json={"username": "pwduser", "password": "Newpass456"}).status_code == 200
 
 
 def test_change_password_wrong_old_password(client, db_session, guac_db):
     headers = _register_and_login(client)
     resp = client.post("/auth/change-password",
-                       json={"old_password": "wrongpass", "new_password": "newpass456"},
+                       json={"old_password": "wrongpass", "new_password": "Newpass456"},
                        headers=headers)
     assert resp.status_code == 400
     assert "原密码" in resp.json()["detail"]
@@ -248,18 +248,18 @@ def test_change_password_guac_failure_keeps_platform_password(client, db_session
 
     monkeypatch.setattr(settings, "guac_db_url", "sqlite:////nonexistent_dir_xyz/guac.db")
     resp = client.post("/auth/change-password",
-                       json={"old_password": "oldpass123", "new_password": "newpass456"},
+                       json={"old_password": "Oldpass123", "new_password": "Newpass456"},
                        headers=headers)
     assert resp.status_code == 502
 
     # 平台密码未被修改
     user = db_session.query(User).filter(User.username == "pwduser").first()
-    assert verify_password_hash("oldpass123", user.password_hash)
+    assert verify_password_hash("Oldpass123", user.password_hash)
 
 
 def test_change_password_demo_account_forbidden(client, db_session, admin_headers):
     resp = client.post("/auth/change-password",
-                       json={"old_password": "admin123", "new_password": "newpass456"},
+                       json={"old_password": "admin123", "new_password": "Newpass456"},
                        headers=admin_headers)
     assert resp.status_code == 400
     assert "演示账号" in resp.json()["detail"]
@@ -267,7 +267,7 @@ def test_change_password_demo_account_forbidden(client, db_session, admin_header
 
 def test_change_password_requires_auth(client):
     resp = client.post("/auth/change-password",
-                       json={"old_password": "a", "new_password": "newpass456"})
+                       json={"old_password": "a", "new_password": "Newpass456"})
     assert resp.status_code == 401
 
 
@@ -302,8 +302,8 @@ def test_ensure_connection_returns_none_for_unknown_user(client, db_session, gua
 
 
 def test_session_connect_uses_dedicated_connection(client, db_session, guac_db):
-    client.post("/auth/register", json={"username": "sess", "password": "pass123456"})
-    login = client.post("/auth/login", json={"username": "sess", "password": "pass123456"})
+    client.post("/auth/register", json={"username": "sess", "password": "Ss123456"})
+    login = client.post("/auth/login", json={"username": "sess", "password": "Ss123456"})
     headers = {"Authorization": f"Bearer {login.json()['access_token']}"}
 
     resp = client.post("/session/connect", headers=headers)

@@ -30,7 +30,7 @@
               <el-input v-model="regForm.username" placeholder="用户名（3-20位字母/数字/._-，即云桌面账号）" :prefix-icon="User" size="large" />
             </el-form-item>
             <el-form-item prop="password">
-              <el-input v-model="regForm.password" type="password" placeholder="密码（6-64字符）" show-password :prefix-icon="Lock" size="large" />
+              <el-input v-model="regForm.password" type="password" placeholder="密码（8-64位，大写/小写/数字/符号至少三类）" show-password :prefix-icon="Lock" size="large" />
             </el-form-item>
             <el-form-item prop="display_name">
               <el-input v-model="regForm.display_name" placeholder="显示名称（可选）" :prefix-icon="UserFilled" size="large" />
@@ -52,6 +52,7 @@ import { ElMessage, type FormInstance, type FormRules } from 'element-plus'
 import { User, Lock, UserFilled } from '@element-plus/icons-vue'
 import { useUserStore } from '@/stores/user'
 import { login as apiLogin, register as apiRegister } from '@/api/auth'
+import { checkPasswordStrength } from '@/utils'
 
 const router = useRouter()
 const userStore = useUserStore()
@@ -78,7 +79,13 @@ const regRules: FormRules = {
   ],
   password: [
     { required: true, message: '请输入密码', trigger: 'blur' },
-    { min: 6, max: 64, message: '密码长度 6-64', trigger: 'blur' },
+    {
+      validator: (_r, v, cb) => {
+        const err = checkPasswordStrength(v, regForm.username)
+        err ? cb(new Error(err)) : cb()
+      },
+      trigger: 'blur',
+    },
   ],
 }
 

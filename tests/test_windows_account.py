@@ -195,8 +195,9 @@ def test_register_windows_failure_rolls_back(client, db_session, monkeypatch):
     fake = FakeSSH(exit_code=1, err="密码不满足复杂性要求")
     monkeypatch.setattr(wa, "connect_ssh", fake)
 
+    # 密码本身合规（API 策略放行），但远端 Windows 因策略/服务问题失败
     resp = client.post("/auth/register",
-                       json={"username": "winuser2", "password": "abcdef"})
+                       json={"username": "winuser2", "password": "Win@2026ab"})
     assert resp.status_code == 502
     assert "Windows 账号同步失败" in resp.json()["detail"]
     # 平台账号不得创建
@@ -246,11 +247,11 @@ def test_change_password_syncs_to_windows(client, db_session, monkeypatch):
     assert "$password = 'Newpass2'" in inner
     assert "Oldpass1" not in inner
 
-    # Windows 失败时平台密码必须保持不变
+    # Windows 失败时平台密码必须保持不变（新密码本身合规，失败来自远端）
     fake.exit_code = 1
     fake.err = "密码不满足复杂性要求"
     resp = client.post("/auth/change-password", headers=headers,
-                       json={"old_password": "Newpass2", "new_password": "short1"})
+                       json={"old_password": "Newpass2", "new_password": "New@9999"})
     assert resp.status_code == 502
 
     # 原密码仍可登录（平台未改）

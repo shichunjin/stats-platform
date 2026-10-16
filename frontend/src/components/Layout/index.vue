@@ -109,7 +109,7 @@
         <el-input v-model="pwdForm.confirm_password" type="password" show-password autocomplete="off" />
       </el-form-item>
     </el-form>
-    <el-text type="info" size="small">修改后，数据分析平台与 Windows 云桌面（Guacamole）登录密码将同步更新。</el-text>
+    <el-text type="info" size="small">新密码需 8-64 位，且包含大写字母、小写字母、数字、特殊符号中的至少三类，不能包含用户名。修改后，数据分析平台与 Windows 云桌面（Guacamole）登录密码将同步更新。</el-text>
     <template #footer>
       <el-button @click="pwdDialogVisible = false">取消</el-button>
       <el-button type="primary" :loading="pwdLoading" @click="submitChangePwd">确认修改</el-button>
@@ -126,6 +126,7 @@ import { useUserStore } from '@/stores/user'
 import { useTabsStore } from '@/stores/tabs'
 import { useMessageStore } from '@/stores/messages'
 import { changePassword } from '@/api/auth'
+import { checkPasswordStrength } from '@/utils'
 import type { Message } from '@/types'
 import TabsView from './TabsView.vue'
 
@@ -184,7 +185,13 @@ const pwdRules: FormRules = {
   old_password: [{ required: true, message: '请输入原密码', trigger: 'blur' }],
   new_password: [
     { required: true, message: '请输入新密码', trigger: 'blur' },
-    { min: 6, max: 64, message: '长度 6-64 个字符', trigger: 'blur' },
+    {
+      validator: (_r, v, cb) => {
+        const err = checkPasswordStrength(v, userStore.user?.username)
+        err ? cb(new Error(err)) : cb()
+      },
+      trigger: 'blur',
+    },
   ],
   confirm_password: [
     { required: true, message: '请再次输入新密码', trigger: 'blur' },

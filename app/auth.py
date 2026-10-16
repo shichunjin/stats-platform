@@ -1,7 +1,8 @@
-"""认证模块：JWT 签发与校验、密码哈希"""
+"""认证模块：JWT 签发与校验、密码哈希、密码强度策略"""
 import base64
 import hashlib
 import os
+import re
 from datetime import datetime, timedelta
 from typing import Optional
 
@@ -31,6 +32,44 @@ if settings.demo_user_password:
 
 
 # ---- 密码哈希（使用 pbkdf2_hmac，无需额外依赖） ----
+
+# ---- 密码强度策略（与 Windows 默认密码复杂度策略对齐并适度加强） ----
+PASSWORD_MIN_LENGTH = 8
+PASSWORD_MAX_LENGTH = 64
+# 四类字符：小写字母、大写字母、数字、特殊符号；至少包含三类
+_PASSWORD_CATEGORY_PATTERNS = (
+    re.compile(r"[a-z]"),
+    re.compile(r"[A-Z]"),
+    re.compile(r"[0-9]"),
+    re.compile(r"[^A-Za-z0-9]"),
+)
+
+
+def validate_password_strength(password: str, username: Optional[str] = None) -> None:
+    """校验密码强度，不合法抛 ValueError（中文信息可直接返回给前端）。
+
+    规则：
+    - 长度 8-64；
+    - 大写字母 / 小写字母 / 数字 / 特殊符号四类中至少包含三类
+      （即 Windows「密码必须符合复杂性要求」）；
+    - 不得包含用户名（长度 ≥3 时按子串、不区分大小写），
+      同样对齐 Windows SAM 对账号名片段的限制。
+    """
+    if not isinstance(password, str):
+        raise ValueError("密码格式不正确")
+    if len(password) < PASSWORD_MIN_LENGTH or len(password) > PASSWORD_MAX_LENGTH:
+        raise ValueError(f"密码长度必须为 {PASSWORD_MIN_LENGTH}-{PASSWORD_MAX_LENGTH} 位")
+    if any(ch.isspace() for ch in password):
+        # 平台不允许空白字符，避免前后端/远程执行链路的歧义
+        raise ValueError("密码不能包含空格或换行")
+
+    categories = sum(1 for pattern in _PASSWORD_CATEGORY_PATTERNS if pattern.search(password))
+    if categories < 3:
+        raise ValueError("密码需至少包含大写字母、小写字母、数字、特殊符号中的三类")
+
+    if username and len(username) >= 3 and username.lower() in password.lower():
+        raise ValueError("密码不能包含用户名")
+
 
 def hash_password(password: str) -> str:
     """生成密码哈希（pbkdf2_sha256，格式：pbkdf2$<salt_b64>$<hash_b64>）"""
