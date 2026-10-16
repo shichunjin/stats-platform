@@ -8,9 +8,13 @@
    身份确定，配合 Windows 端 NTFS ACL / 登录脚本实现按用户的绝对隔离；
 3. 仅授予该用户对自己专属连接的 READ 权限，用户之间互不可见、不可用。
 
-密码算法遵循 guacamole-auth-jdbc 标准：
+密码算法遵循 guacamole-auth-jdbc 标准（已用 guacadmin 账号实测对齐）：
     password_salt = 32 字节随机盐
-    password_hash = SHA256( 明文密码(UTF-8) + salt 的小写 hex 字符串(UTF-8) )
+    password_hash = SHA256( 明文密码(UTF-8) + salt 的【大写】HEX 字符串(UTF-8) )
+
+注意必须是大写 HEX：Guacamole Java 端按 String.format("%02X", b) 拼接，
+官方手册的 MySQL 示例 HEX(@salt) 同样返回大写。Python bytes.hex() 是小写，
+直接使用会导致写入成功但 Guacamole 登录恒为 Invalid login。
 
 连接名约定为 ``{GUAC_CONNECTION_PREFIX}{用户名}``（默认 ``windows-用户名``）。
 
@@ -32,9 +36,9 @@ def guac_sync_enabled() -> bool:
 
 
 def _hash_password(password: str, salt: bytes) -> bytes:
-    """guacamole-auth-jdbc 标准密码哈希"""
+    """guacamole-auth-jdbc 标准密码哈希：SHA256(密码 + 大写HEX(盐))"""
     return hashlib.sha256(
-        password.encode("utf-8") + salt.hex().encode("utf-8")
+        password.encode("utf-8") + salt.hex().upper().encode("utf-8")
     ).digest()
 
 

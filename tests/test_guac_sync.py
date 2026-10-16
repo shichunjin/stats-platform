@@ -57,8 +57,28 @@ CREATE TABLE guacamole_connection_permission (
 
 
 def _guac_hash(password: str, salt: bytes) -> bytes:
-    """按 guacamole-auth-jdbc 标准重算哈希，用于断言"""
-    return hashlib.sha256(password.encode("utf-8") + salt.hex().encode("utf-8")).digest()
+    """按 guacamole-auth-jdbc 标准重算哈希，用于断言（盐用大写 HEX 拼接）"""
+    return hashlib.sha256(password.encode("utf-8") + salt.hex().upper().encode("utf-8")).digest()
+
+
+def test_password_hash_contract_matches_real_guacamole():
+    """密码哈希契约的已知答案向量（向量独立手工计算，不引用被测实现）。
+
+    背景：Guacamole 1.6.0 实测以 SHA256(密码 + 盐的【大写】HEX) 校验
+    （用 guacadmin 账号指纹比对确认；Java 端为 String.format("%02X")，
+    官方 MySQL 示例 HEX(@salt) 同样返回大写）。小写 hex 会写入成功
+    但登录恒为 Invalid login —— 此测试锁死该大小写约定。
+    """
+    from app.guac import _hash_password
+
+    salt = bytes(range(32))
+    assert _hash_password("Guacpass123", salt).hex() == (
+        "dabe21571a2276e8fc3235b53420d26965dfa54022f14cbfcff13456fee03fd4"
+    )
+    # 小写 hex 是曾经导致线上登录全失败的错误算法，必须与之不同
+    assert _hash_password("Guacpass123", salt).hex() != (
+        "12a6606089c5955ef6730a624b9977b133d8568c1c3fc42eedbad048bb2a7300"
+    )
 
 
 @pytest.fixture
