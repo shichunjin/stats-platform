@@ -120,16 +120,19 @@ def _set_user_password(conn, entity_id: int, password: str) -> None:
     salt = secrets.token_bytes(32)
     pwd_hash = _hash_password(password, salt)
     now = datetime.utcnow()
+    # 布尔列必须写标准 SQL 的 FALSE：PostgreSQL 不接受 integer 字面量 0
+    # （SQLite 3.23+ 同样支持 TRUE/FALSE 关键字）。
     result = conn.execute(
         text("UPDATE guacamole_user SET password_hash = :h, password_salt = :s, "
-             "password_date = :d, disabled = 0, expired = 0 WHERE entity_id = :eid"),
+             "password_date = :d, disabled = FALSE, expired = FALSE "
+             "WHERE entity_id = :eid"),
         {"h": pwd_hash, "s": salt, "d": now, "eid": entity_id},
     )
     if result.rowcount == 0:
         conn.execute(
             text("INSERT INTO guacamole_user "
                  "(entity_id, password_hash, password_salt, password_date, disabled, expired) "
-                 "VALUES (:eid, :h, :s, :d, 0, 0)"),
+                 "VALUES (:eid, :h, :s, :d, FALSE, FALSE)"),
             {"eid": entity_id, "h": pwd_hash, "s": salt, "d": now},
         )
 

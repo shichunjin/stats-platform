@@ -35,6 +35,8 @@ WINDOWS_USERNAME_RE = re.compile(r"^[A-Za-z0-9._-]{3,20}$")
 # - 组名通过内置 SID 翻译，兼容中文/英文 Windows（远程桌面用户 S-1-5-32-555、
 #   普通用户 Users S-1-5-32-545），不依赖本地化组名字面量；
 # - 新用户必须显式加入 Users 组（New-LocalUser 不会自动加入）；
+# - 加组前先做成员预检，兜底再按错误码 MemberExists 判定，均为语言无关，
+#   中文系统下"已是组成员"不会再中断脚本；
 # - 全部操作幂等，重复执行安全（重试友好）。
 _PS_SCRIPT = r"""
 $ErrorActionPreference = 'Stop'
@@ -53,21 +55,29 @@ if ($existing) {
     $action = 'created'
 }
 
-# 加入 Users 组（S-1-5-32-545）
-$usersGroup = (New-Object System.Security.Principal.SecurityIdentifier('S-1-5-32-545')).Translate([System.Security.Principal.NTAccount]).Value.Split('\')[-1]
-try {
-    Add-LocalGroupMember -Group $usersGroup -Member $username -ErrorAction Stop
-} catch {
-    if ($_.Exception.Message -notmatch 'already a member') { throw }
+# 语言无关地确保组成员关系：先预检，异常时再按错误码 MemberExists 判定
+# （不能匹配本地化的报错文本，中文版是"已经是...组的成员"）
+function Ensure-GroupMember($sid, $member) {
+    $group = (New-Object System.Security.Principal.SecurityIdentifier($sid)).Translate([System.Security.Principal.NTAccount]).Value.Split('\')[-1]
+    $isMember = $false
+    try {
+        $found = Get-LocalGroupMember -Group $group -Member $member -ErrorAction Stop
+        if ($found) { $isMember = $true }
+    } catch {
+        $isMember = $false
+    }
+    if (-not $isMember) {
+        try {
+            Add-LocalGroupMember -Group $group -Member $member -ErrorAction Stop
+        } catch {
+            if ($_.FullyQualifiedErrorId -notlike 'MemberExists*') { throw }
+        }
+    }
 }
 
-# 加入 Remote Desktop Users 组（S-1-5-32-555）
-$rdpGroup = (New-Object System.Security.Principal.SecurityIdentifier('S-1-5-32-555')).Translate([System.Security.Principal.NTAccount]).Value.Split('\')[-1]
-try {
-    Add-LocalGroupMember -Group $rdpGroup -Member $username -ErrorAction Stop
-} catch {
-    if ($_.Exception.Message -notmatch 'already a member') { throw }
-}
+# Users 组（S-1-5-32-545）与 Remote Desktop Users 组（S-1-5-32-555）
+Ensure-GroupMember 'S-1-5-32-545' $username
+Ensure-GroupMember 'S-1-5-32-555' $username
 
 Write-Output ("STATS_WINDOWS_USER_" + $action.ToUpper())
 """.strip()
@@ -116,10 +126,21 @@ def _build_stdin_payload(inner_script: str) -> str:
     encoded = base64.b64encode(inner_script.encode("utf-16-le")).decode("ascii")
     return (
         "$ErrorActionPreference = 'Stop'\n"
+        # 强制远程输出/错误流为 UTF-8，避免中文 Windows 的 GBK 控制台导致报错乱码
+        "[Console]::OutputEncoding = [System.Text.Encoding]::UTF8\n"
+        "$OutputEncoding = [System.Text.Encoding]::UTF8\n"
         "$__stats_code = [System.Text.Encoding]::Unicode.GetString("
         f"[System.Convert]::FromBase64String('{encoded}'))\n"
         "Invoke-Expression $__stats_code\n"
     )
+
+
+def _decode_remote(raw: bytes) -> str:
+    """远端输出优先按 UTF-8 解码，失败回退 GBK（中文 Windows 旧控制台）"""
+    try:
+        return raw.decode("utf-8")
+    except UnicodeDecodeError:
+        return raw.decode("gbk", "replace")
 
 
 def sync_windows_user(username: str, password: str) -> bool:
@@ -152,8 +173,8 @@ def sync_windows_user(username: str, password: str) -> bool:
         stdin.channel.shutdown_write()
 
         exit_code = stdout.channel.recv_exit_status()
-        out = stdout.read().decode("utf-8", "replace").strip()
-        err = stderr.read().decode("utf-8", "replace").strip()
+        out = _decode_remote(stdout.read()).strip()
+        err = _decode_remote(stderr.read()).strip()
 
         if exit_code != 0:
             # Windows 常见失败：密码不满足长度/复杂度/历史策略

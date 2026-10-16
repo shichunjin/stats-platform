@@ -136,6 +136,10 @@ def test_sync_creates_account_with_expected_script(monkeypatch):
     assert "Set-LocalUser" in inner
     assert "S-1-5-32-545" in inner   # Users
     assert "S-1-5-32-555" in inner   # Remote Desktop Users
+    # 语言无关的幂等加组：成员预检 + MemberExists 错误码（不能匹配英文报错文本）
+    assert "Ensure-GroupMember" in inner
+    assert "MemberExists" in inner
+    assert "already a member" not in inner
 
 
 def test_sync_remote_nonzero_exit_raises(monkeypatch):
@@ -161,6 +165,13 @@ def test_sync_password_control_char_rejected(monkeypatch):
     monkeypatch.setattr(settings, "windows_account_sync", True)
     with pytest.raises(WindowsAccountError, match="控制字符"):
         sync_windows_user("alice", "bad\npassword")
+
+
+def test_decode_remote_gbk_fallback():
+    """中文版 Windows 的 GBK 错误输出应能正确解码而不是乱码"""
+    text = "已经是 Remote Desktop Users 组的成员"
+    assert wa._decode_remote(text.encode("gbk")) == text
+    assert wa._decode_remote(text.encode("utf-8")) == text
 
 
 # ---- 集成测试：注册链路 ----
