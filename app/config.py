@@ -42,6 +42,10 @@ class Settings(BaseSettings):
     # 用户工作区根目录（管理员按申请生成的数据推送到 {该目录}/{用户名}/，对应用户的 W: 盘）
     windows_workspace_dir: str = "C:/workspace"
 
+    # 注册/改密时是否经 SSH 在 Windows 云主机同步创建/更新同名本地账号
+    # （复用 SFTP 的主机与免密私钥；本地开发可设 WINDOWS_ACCOUNT_SYNC=false 关闭）
+    windows_account_sync: bool = True
+
     # 远程桌面
     rds_host: str = "8.133.223.251"
     rds_port: int = 3389

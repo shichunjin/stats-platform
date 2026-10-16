@@ -11,7 +11,11 @@ class LoginRequest(BaseModel):
 
 
 class RegisterRequest(BaseModel):
-    username: str = Field(..., min_length=3, max_length=32, description="用户名（3-32 字符）",
+    # 用户名同时作为 Windows 本地账号名，遵循 Windows 命名规则：
+    # 3-20 位，仅字母数字与 . _ -，不含空格与 " / \ [ ] : ; | = , + * ? < > @
+    username: str = Field(..., min_length=3, max_length=20,
+                          pattern=r"^[A-Za-z0-9._-]+$",
+                          description="用户名（3-20 位字母、数字或 . _ -，将作为 Windows 登录账号）",
                           examples=["newuser"])
     password: str = Field(..., min_length=6, max_length=64, description="密码（6-64 字符）",
                           examples=["newpass123"])

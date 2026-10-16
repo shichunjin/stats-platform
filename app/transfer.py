@@ -11,8 +11,8 @@ import paramiko
 from app.config import settings
 
 
-def _connect_sftp() -> tuple[paramiko.SFTPClient, paramiko.SSHClient]:
-    """建立 SFTP 连接，返回 (sftp, ssh_client)。调用方负责关闭。"""
+def connect_ssh() -> paramiko.SSHClient:
+    """建立到 Windows 云主机的 SSH 连接（密钥免密）。调用方负责 close。"""
     key_path = os.path.expanduser(settings.sftp_key_path)
     if not os.path.exists(key_path):
         raise FileNotFoundError(f"SFTP 私钥不存在: {key_path}")
@@ -48,6 +48,12 @@ def _connect_sftp() -> tuple[paramiko.SFTPClient, paramiko.SSHClient]:
         allow_agent=False,
         look_for_keys=False,
     )
+    return ssh
+
+
+def _connect_sftp() -> tuple[paramiko.SFTPClient, paramiko.SSHClient]:
+    """建立 SFTP 连接，返回 (sftp, ssh_client)。调用方负责关闭。"""
+    ssh = connect_ssh()
     return ssh.open_sftp(), ssh
 
 

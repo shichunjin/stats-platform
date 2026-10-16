@@ -27,7 +27,7 @@
         <el-tab-pane label="注册" name="register">
           <el-form ref="regFormRef" :model="regForm" :rules="regRules" @submit.prevent="onRegister">
             <el-form-item prop="username">
-              <el-input v-model="regForm.username" placeholder="用户名（3-32字符）" :prefix-icon="User" size="large" />
+              <el-input v-model="regForm.username" placeholder="用户名（3-20位字母/数字/._-，即云桌面账号）" :prefix-icon="User" size="large" />
             </el-form-item>
             <el-form-item prop="password">
               <el-input v-model="regForm.password" type="password" placeholder="密码（6-64字符）" show-password :prefix-icon="Lock" size="large" />
@@ -73,7 +73,8 @@ const rules: FormRules = {
 const regRules: FormRules = {
   username: [
     { required: true, message: '请输入用户名', trigger: 'blur' },
-    { min: 3, max: 32, message: '用户名长度 3-32', trigger: 'blur' },
+    { min: 3, max: 20, message: '用户名长度 3-20', trigger: 'blur' },
+    { pattern: /^[A-Za-z0-9._-]+$/, message: '仅允许字母、数字及 . _ -', trigger: 'blur' },
   ],
   password: [
     { required: true, message: '请输入密码', trigger: 'blur' },

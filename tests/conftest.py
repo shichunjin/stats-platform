@@ -14,6 +14,8 @@ os.environ["JWT_SECRET"] = "test-secret-key-for-unit-tests"
 os.environ["DEMO_ADMIN_PASSWORD"] = "admin123"
 os.environ["DEMO_USER_PASSWORD"] = "user123"
 os.environ["FILESERVER_ROOT"] = tempfile.mkdtemp(prefix="stats_test_")
+# 测试环境不连真实 Windows 云主机同步本地账号
+os.environ["WINDOWS_ACCOUNT_SYNC"] = "false"
 
 # ---- 创建测试引擎并 monkey-patch database 模块 ----
 TEST_ENGINE = create_engine(
