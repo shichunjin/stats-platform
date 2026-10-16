@@ -47,6 +47,9 @@ Thumbs.db
 !.env.example
 !**/.env.example
 
+# Guacamole（db-data 为运行时 PostgreSQL 数据目录，不入库）
+guacamole/db-data/
+
 # 前端
 frontend/node_modules/
 frontend/*.local
