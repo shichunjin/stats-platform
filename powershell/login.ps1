@@ -139,6 +139,34 @@ if (-not $IsAdmin -and (Test-Path $WDrive)) {
     New-ItemProperty -Path $placesKey -Name "Place0" -Value "W:\"         -PropertyType String -Force | Out-Null
     New-ItemProperty -Path $placesKey -Name "Place1" -Value $UserPending  -PropertyType String -Force | Out-Null
     New-ItemProperty -Path $placesKey -Name "Place2" -Value "Z:\"         -PropertyType String -Force | Out-Null
+} elseif (-not $IsAdmin) {
+    # 3.6 W: 盘不可用（工作区未开通或共享异常）：回退文件夹重定向到本地默认路径，
+    #     避免上次登录已重定向到 W:\Desktop 但本次 W: 缺失时弹出"位置不可用"。
+    $userShellKey = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\User Shell Folders"
+    $shellFoldersKey = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Shell Folders"
+    $curDesktop   = (Get-ItemProperty -Path $userShellKey -Name "Desktop" -ErrorAction SilentlyContinue).Desktop
+    $curDocuments = (Get-ItemProperty -Path $userShellKey -Name "Personal" -ErrorAction SilentlyContinue).Personal
+    $dlGuid = "{374DE290-123F-4565-9164-39C4925E467B}"
+    $curDownloads = (Get-ItemProperty -Path $userShellKey -Name $dlGuid -ErrorAction SilentlyContinue).$dlGuid
+
+    $profileDir = $env:USERPROFILE
+    $defaultDesktop   = "$profileDir\Desktop"
+    $defaultDocuments = "$profileDir\Documents"
+    $defaultDownloads = "$profileDir\Downloads"
+
+    if ($curDesktop -like "W:\*") {
+        Set-ItemProperty -Path $userShellKey -Name "Desktop" -Value $defaultDesktop -Type ExpandString
+        Set-ItemProperty -Path $shellFoldersKey -Name "Desktop" -Value $defaultDesktop -Type String
+    }
+    if ($curDocuments -like "W:\*") {
+        Set-ItemProperty -Path $userShellKey -Name "Personal" -Value $defaultDocuments -Type ExpandString
+        Set-ItemProperty -Path $shellFoldersKey -Name "Personal" -Value $defaultDocuments -Type String
+    }
+    if ($curDownloads -like "W:\*") {
+        Set-ItemProperty -Path $userShellKey -Name $dlGuid -Value $defaultDownloads -Type ExpandString
+        Set-ItemProperty -Path $shellFoldersKey -Name $dlGuid -Value $defaultDownloads -Type String
+    }
+    Write-Warning "W: 盘不可用，文件夹重定向已回退到本地默认路径。请检查工作区目录与 SMB 共享。"
 }
 
 # ============================================================
