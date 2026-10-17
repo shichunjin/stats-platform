@@ -60,9 +60,11 @@ $UserPending   = "$PendingRoot\$Username"
 
 # W: -> user workspace (writable, PRIVATE per user). Backend pre-creates and
 # locks the folder; map only when it exists.
+# 持久化映射（/persistent:yes）：Windows 在资源管理器启动前就会恢复持久映射，
+# 否则 Explorer 先读到"桌面 -> W:\Desktop"而 W: 尚未映射，登录时会弹"位置不可用"。
 if (Test-Path $UserWorkspace) {
     if (Test-Path $WDrive) { net use $WDrive /delete /y | Out-Null }
-    net use $WDrive $UserWorkspace /persistent:no | Out-Null
+    net use $WDrive $UserWorkspace /persistent:yes | Out-Null
 } else {
     Write-Warning "私有工作区不存在（后端尚未开通？）: $UserWorkspace"
 }
