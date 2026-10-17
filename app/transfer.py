@@ -1,4 +1,5 @@
-"""SFTP 文件传输：把 Linux 后端生成的文件推送到 Windows 云主机
+"""SFTP 文件传输：把 Linux 后端生成的文件推送到 Windows 云主机 /
+把用户在 Windows 暂存目录里的结果文件回拉到服务器
 
 使用 paramiko + 密钥免密认证。Windows 端需先启用 OpenSSH Server
 （见 powershell/setup-sftp-datadrive.ps1），并把 Linux 端公钥加入
@@ -6,6 +7,7 @@ C:\\ProgramData\\ssh\\administrators_authorized_keys。
 """
 import os
 import re
+import stat as stat_mod
 
 import paramiko
 
@@ -146,3 +148,39 @@ def upload_file_to_windows(
     # 返回展示用的 Windows 本地路径
     win_dir = target_dir.replace("/", "\\")
     return f"{win_dir}\\{filename}"
+
+
+def list_remote_files(remote_dir: str) -> list[tuple[str, int]]:
+    """列出远端目录下的普通文件，返回 [(文件名, 字节数)]；目录不存在则返回空。"""
+    sftp, ssh = _connect_sftp()
+    try:
+        try:
+            attrs = sftp.listdir_attr(remote_dir)
+        except (IOError, OSError):
+            return []
+        files: list[tuple[str, int]] = []
+        for a in attrs:
+            mode = getattr(a, "st_mode", None)
+            if mode is not None and stat_mod.S_ISDIR(mode):
+                continue
+            files.append((a.filename, int(getattr(a, "st_size", 0) or 0)))
+        return files
+    finally:
+        sftp.close()
+        ssh.close()
+
+
+def download_file_from_windows(remote_dir: str, remote_name: str,
+                               local_path: str) -> str:
+    """从 Windows 云主机 SFTP 下载单个文件到本地（父目录自动创建）。"""
+    remote_path = f"{remote_dir.rstrip('/')}/{remote_name}"
+    sftp, ssh = _connect_sftp()
+    try:
+        parent = os.path.dirname(local_path)
+        if parent:
+            os.makedirs(parent, exist_ok=True)
+        sftp.get(remote_path, local_path)
+    finally:
+        sftp.close()
+        ssh.close()
+    return local_path

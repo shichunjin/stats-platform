@@ -170,6 +170,18 @@ def admin_headers(admin_token):
     return {"Authorization": f"Bearer {admin_token}"}
 
 
+@pytest.fixture(autouse=True)
+def _no_remote_pending_pull(monkeypatch):
+    """默认禁止「申请导出」真实 SFTP 回拉 Windows 待导出目录。
+
+    旧有用例直接把文件写在服务器本地 pending 目录模拟；回拉链路的用例
+    （test_results_pull.py）会自行恢复真实函数并注入 SFTP 替身。
+    """
+    from app.routers import results as results_routes
+    monkeypatch.setattr(results_routes, "pull_user_pending",
+                        lambda user, local_dir: [])
+
+
 @pytest.fixture
 def pending_dir(test_user):
     """创建测试用户的 pending 目录（每个测试前清空）"""
