@@ -46,7 +46,8 @@ stats-platform/
 │   └── .env.example            # 数据库密码环境变量模板
 ├── powershell/                 # Windows 脚本
 │   ├── setup-rdsh.ps1          # RDS 会话主机部署脚本（装角色/配许可/建本地用户，无域环境）
-│   ├── login.ps1               # 用户登录脚本（映射 Z:/W: 盘、环境变量、快捷方式）
+│   ├── login.ps1               # 用户登录脚本（映射 Z:/W: 盘、环境变量、快捷方式、落点强制）
+│   ├── enforce-output-location.ps1 # 机器级落点强制（R/Stata 启动目录、通用对话框位置栏，新装软件后重跑）
 │   └── configure-rds.ps1       # RDS 安全配置（禁用剪贴板/驱动器/打印）
 ├── schema.sql                  # PostgreSQL 数据库 DDL
 └── requirements.txt            # Python 依赖
@@ -189,9 +190,29 @@ Restart-Service -Name TermService -Force
 # Mplus           → C:\Program Files\Mplus\mplus.exe
 # Stata SE 18     → C:\Program Files\Stata18\StataSE-64.exe
 
+# ③.5 软件安装后运行一次：固化启动工作目录、锁定通用"另存为"位置栏
+#      （新装/升级任何统计软件后重跑一次即可，幂等）
+.\powershell\enforce-output-location.ps1
+
 # ④ 部署登录脚本到文件服务器
 Copy-Item .\powershell\login.ps1 \\fileserver\scripts\login.ps1
 ```
+
+**生成物落点强制（保证各软件生成文件都在本人指定目录）：**
+
+| 层级 | 措施 | 生效范围 |
+|------|------|---------|
+| 会话 | RDS 每用户独立 Session，剪贴板/本地盘/打印重定向禁用 | 所有软件 |
+| 目录 | `C:\workspace\{用户}`（W:）/ `C:\pending\{用户}` NTFS 仅本人可写 + SMB 开启 ABE | 所有软件 |
+| 重定向 | 登录时把**桌面/文档/下载**重定向到 `W:\Desktop` 等子目录（首次自动迁移存量文件），存到这些常见位置实际都进本人 W: 盘 | 所有软件 |
+| 隐藏盘符 | 普通用户资源管理器/标准"另存为"对话框隐藏并禁止访问 C:（管理员豁免；不影响软件运行，W:/Z: 网络盘不受限） | 所有软件 |
+| 位置栏 | 打开/另存为对话框左侧栏固定为 W: / 本人待导出目录 / Z: | 所有标准文件对话框 |
+| 启动目录 | R `Rprofile.site` 启动 `setwd("W:/")`；Stata `profile.do` 启动 `cd "W:/"`；快捷方式起始目录均为 W: | R / Stata / 快捷方式启动的软件 |
+| 唯一出口 | 后端只回拉 `C:\pending\{用户}` 申请导出，落在其他位置的文件无导出渠道 | 平台规则 |
+
+> 通用 GUI 软件的"另存为"无法在应用层拦截，业界通行做法即"唯一可写位置 + 隐藏其他位置 + 出口管控"组合。`%TEMP%`/AppData 保持可写以确保软件正常运行；可选 `enforce-output-location.ps1 -HardenRootAcl` 进一步禁止普通用户在 `C:\` 根新建文件。
+>
+> **后续新软件接入清单**（无需改后端）：① 正常安装到 `C:\Program Files`；② 在 `login.ps1` 的 `$SoftwareConfigs` 表追加一条快捷方式（起始目录自动为 W:）；③ 若该软件有启动配置机制（类 Rprofile/profile.do），在 `enforce-output-location.ps1` 追加对应固化段并重跑；其余重定向/隐藏/位置栏/出口管控对它自动生效。
 
 **重要说明（无域环境）：**
 
