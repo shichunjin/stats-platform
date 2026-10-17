@@ -7,11 +7,15 @@
 
 - 相似度 ≥ 阈值（默认 60%，可由 EXPORT_REVIEW_SIMILARITY_THRESHOLD 配置）：
   判定疑似原始数据，登记为待审核，管理员人工 approve / reject；
-- 相似度低于阈值：免审核，系统自动发布，用户立即可下载；
-- 图片/PDF/二进制等无法提取文本的文件：免审核自动发布；
-- 原始数据基线缺失无法判定时：安全默认转人工审核。
+- 相似度低于阈值且通过白名单/敏感信息规则审查（review_result）：免审核，
+  系统自动发布，用户立即可下载；
+- 图片（png/jpg/jpeg）：免审核自动发布；
+- 统计软件原生格式/压缩包/文档（.dta/.rds/.xlsx/.zip/.pdf 等）：一律转人工审核；
+- 不允许导出的未知类型：直接拒绝（rejected）并写入审计日志；
+- 原始数据基线缺失、二进制伪装文本、编码混淆无法判定时：安全默认转人工审核。
 
-所有文件类型都允许申请导出，不再做扩展名白名单拦截。
+安全修复 A2：导出按扩展名门禁分级，未知类型直接拒绝，杜绝
+".dta/.zip 改名 .txt""Base64 编码后导出"等绕过手段。
 """
 import os
 import re
@@ -24,7 +28,7 @@ from app.database import get_db
 from app.models import User, PendingFile, ExportResult, AuditLog
 from app.auth import get_current_user
 from app.config import settings
-from app.review import scan_pending_directory, decide_export_review
+from app.review import scan_pending_directory, decide_export_review, review_result
 from app.schemas import PendingFileOut, ExportResultOut
 from app.transfer import list_remote_files, download_file_from_windows
 
@@ -124,11 +128,15 @@ def get_my_results(
 
 - 相似度 **≥ 60%**（`EXPORT_REVIEW_SIMILARITY_THRESHOLD` 可调）：登记为
   「待审核」，管理员在 `/admin/pending` 中人工 approve / reject；
-- 相似度 **< 60%** 或图片/PDF/二进制等无法提取文本的文件：**免审核自动发布**，
-  立即可在「已发布」列表下载（30 天有效）；
-- 原始数据基线缺失无法判定时安全默认转人工审核。
+- 文本类文件相似度 **< 60%** 且通过白名单/敏感信息规则审查（review_result）：**免审核自动发布**，
+  立即可在「已发布」列表下载（30 天有效）；图片（png/jpg/jpeg）免审自动发布；
+- 统计软件原生格式/压缩包/文档（.dta/.rds/.xlsx/.zip/.pdf 等）：无法可靠判定，
+  **一律转人工审核**；
+- 不允许导出的未知类型：直接**拒绝**（status=rejected）并写入审计日志；
+- 原始数据基线缺失、二进制伪装文本、编码混淆无法判定时，安全默认转人工审核。
 
-返回 `registered`（需人工审核数）与 `auto_approved`（免审自动通过数）。
+返回 `registered`（需人工审核数）、`auto_approved`（免审自动通过数）、
+`rejected`（拒绝数）。
 
 **错误码**
 - `401`：未认证
@@ -155,6 +163,7 @@ def request_export(
 
     need_review: list[dict] = []
     auto_approved: list[dict] = []
+    rejected: list[dict] = []
     for fpath in files:
         fname = os.path.basename(fpath)
         existing = db.query(PendingFile).filter(
@@ -177,7 +186,32 @@ def request_export(
         db.flush()  # 取得 pf.id，供发布目录命名与 pending_file_id 关联
 
         decision, reason, _score = decide_export_review(fpath)
-        if decision == "auto":
+
+        # 安全修复 B8：免审自动发布前必须同时通过白名单/敏感信息规则审查
+        # （图片类不包含行级数据，跳过规则审查）
+        if decision == "auto" \
+                and os.path.splitext(fname)[1].lower() not in (".png", ".jpg", ".jpeg"):
+            ok, rule_reason = review_result(fpath)
+            if not ok:
+                decision = "review"
+                reason = f"{rule_reason}；转管理员人工审核"
+
+        if decision == "reject":
+            # 安全修复 A2：不允许导出的类型（未知扩展名），登记为拒绝并审计
+            pf.status = "rejected"
+            pf.review_reason = reason
+            db.add(AuditLog(
+                user_id=user.id,
+                action="export_rejected",
+                detail=f"导出被拒绝 {fname} (id={pf.id})：{reason}",
+            ))
+            rejected.append({
+                "id": pf.id,
+                "file_name": fname,
+                "status": "rejected",
+                "reason": reason,
+            })
+        elif decision == "auto":
             exp = _auto_publish(db, pf, reason)
             db.add(AuditLog(
                 user_id=user.id,
@@ -215,6 +249,8 @@ def request_export(
         "files": need_review,
         "auto_approved": len(auto_approved),
         "auto_files": auto_approved,
+        "rejected": len(rejected),
+        "rejected_files": rejected,
     }
 
 

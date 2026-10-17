@@ -53,13 +53,22 @@ def _build_rdp_parameters(username: str, password: Optional[str]) -> dict:
     - 强制写入 RDP 用户名：按用户名映射 Windows 身份，用户无法手工改成他人；
     - 自动登录开启时写入明文密码，实现浏览器一键直连（要求 Windows 账号
       与平台账号同名同密码）；
-    - 虚拟盘 / 录像目录均按用户名隔离子目录。
+    - 安全修复 A3：强制禁用剪贴板/虚拟盘/打印等外带通道，数据只能通过
+      平台的申请-审批-发布流程带出，不允许经浏览器剪贴板或 Guacamole 虚拟盘
+      直接拷出。
     """
     params = {
         "hostname": settings.rds_host,
         "port": str(settings.rds_port),
         # 客户端窗口大小随浏览器自适应
         "resize-method": "display-update",
+        # ---- 安全修复 A3：通道管控（强制，不受配置项影响）----
+        "disable-copy": "true",     # 禁用远程 → 浏览器 剪贴板复制
+        "disable-paste": "true",    # 禁用 浏览器 → 远程 剪贴板粘贴
+        "disable-drive": "true",    # 禁用 Guacamole 虚拟盘（浏览器传文件通道）
+        "disable-print": "true",    # 禁用远程打印（PDF 重定向下载）
+        "enable-drive": "false",
+        "enable-printing": "false",
     }
 
     if settings.guac_rdp_auto_login:
@@ -76,14 +85,8 @@ def _build_rdp_parameters(username: str, password: Optional[str]) -> dict:
     if settings.guac_rdp_ignore_cert:
         params["ignore-cert"] = "true"
 
-    # RDP 虚拟驱动器（浏览器与远程会话之间传文件），按用户隔离 guacd 落地目录
-    if settings.guac_drive_root:
-        root = settings.guac_drive_root.rstrip("/")
-        params.update({
-            "enable-drive": "true",
-            "create-drive-path": "true",
-            "drive-path": f"{root}/{username}",
-        })
+    # 安全修复 A3：不再启用 Guacamole 虚拟盘（guac_drive_root 配置已废弃，
+    # 文件进出一律走 W:/RESULTS_DIR + 平台申请-审批流程）。
 
     # 会话录像（审计），按用户隔离
     if settings.guac_recording_root:

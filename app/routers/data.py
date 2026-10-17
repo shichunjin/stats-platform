@@ -8,7 +8,6 @@ from app.auth import get_current_user, require_admin
 from app.config import settings
 from app.dataset import (
     import_csv_to_db,
-    generate_excel_from_table,
     generate_filtered_excel_from_table,
     analyze_table_columns,
     timestamp_filename,
@@ -55,77 +54,23 @@ def import_dataset(
     }
 
 
-@router.post("/fetch", summary="获取数据（生成 Excel 并推送到个人 W: 盘）", description="""
-**从业务宽表 test_data 读取数据生成 Excel，并通过 SFTP 推送到当前用户的私有工作区**
+@router.post("/fetch", summary="获取数据（已停用）", description="""
+**该接口已停用（安全加固）**
 
-- 数据来源：`create_testdata_table.py` 建立的业务宽表（默认表名 `test_data`，可用环境变量覆盖）
-- 每个用户拿到的是自己的一份副本，推送到 `C:\\workspace\\{用户名}\\`（W: 盘根目录），
-  目录与文件的 NTFS 权限在投递时强制收敛为仅本人 / SYSTEM / Administrators，
-  其他 RDP 用户既看不到也无法读取
-- 文件命名 `{原始名}_{YYYYMMDD_HHMMSS}.xlsx`（同秒内重复获取自动追加序号），
-  历史文件保留不覆盖；生成的 `.xlsx` 先落到 `fileserver_root/data/`，
-  再 SFTP 上传到 Windows
-- 用户连接 Windows 平台后，在 **W: 盘**即可直接打开使用
+数据获取必须走「申请 → 管理员按筛选生成」流程，禁止任何用户直接拉取全量宽表。
 
 **错误码**
-- `401`：未认证
-- `404`：业务数据表不存在或没有数据列（需先运行 create_testdata_table.py）
-- `502`：SFTP 推送或权限锁定失败（检查 OpenSSH、安全组 22 端口、私钥配置）
+- `403`：接口已停用，请通过数据申请由管理员生成
 """)
 def fetch_data(
     user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
 ):
-    out_dir = os.path.join(settings.fileserver_root, "data")
-    os.makedirs(out_dir, exist_ok=True)
-
-    # 时间戳命名，每次获取生成独立文件、不覆盖历史；
-    # 同一秒内重复获取（或时钟极接近）时追加 _2/_3 序号兜底。
-    filename = timestamp_filename(settings.dataset_name)
-    out_path = os.path.join(out_dir, filename)
-    seq = 2
-    while os.path.exists(out_path):
-        filename = timestamp_filename(settings.dataset_name)
-        stem, ext = os.path.splitext(filename)
-        filename = f"{stem}_{seq}{ext}"
-        out_path = os.path.join(out_dir, filename)
-        seq += 1
-
-    try:
-        rows, columns = generate_excel_from_table(db, settings.testdata_table, out_path)
-    except ValueError as e:
-        raise HTTPException(status_code=404, detail=str(e))
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"生成 Excel 失败: {str(e)}")
-
-    # SFTP 推送到当前用户的私有工作区（W: 盘），投递后立即锁定目录与文件为本人私有
-    remote_dir = f"{settings.windows_workspace_dir}/{user.username}"
-    try:
-        win_path = upload_file_to_windows(
-            out_path, remote_dir=remote_dir, remote_name=filename,
-            lock_owner=user.username,
-        )
-    except Exception as e:
-        raise HTTPException(
-            status_code=502,
-            detail=f"Excel 已生成，但推送到 Windows 云平台失败: {str(e)}",
-        )
-
-    db.add(AuditLog(
-        user_id=user.id,
-        action="data_fetch",
-        detail=f"获取数据 {filename}: {rows} 行, {columns} 列，"
-               f"已推送到 Windows {win_path}",
-    ))
-    db.commit()
-
-    return {
-        "filename": filename,
-        "rows": rows,
-        "columns": columns,
-        "local_path": out_path,
-        "windows_path": win_path,
-    }
+    # 安全修复 A1：原实现允许任意登录用户一键拉取全量业务宽表，
+    # 绕过申请与数据权限（scopes）。保留路由以显式拒绝旧客户端。
+    raise HTTPException(
+        status_code=403,
+        detail="直接获取数据已停用，请通过「申请获取数据」由管理员生成",
+    )
 
 
 @router.get("/columns", summary="获取数据表列结构（智能筛选控件元数据，管理员）", description="""
@@ -172,6 +117,27 @@ def generate_filtered(
     if target is None:
         raise HTTPException(status_code=404, detail="目标用户不存在")
 
+    # 安全修复 A1/B6：生成必须绑定有效申请，且申请属于目标用户、处于可处理状态。
+    # with_for_update 行锁防止并发重复生成/重复置完成。
+    if not payload.apply_id:
+        raise HTTPException(
+            status_code=400,
+            detail="生成数据必须关联数据申请，请从「待处理申请」页面发起",
+        )
+    apply_obj = db.query(DataApply).filter(
+        DataApply.id == payload.apply_id,
+    ).with_for_update().first()
+    if apply_obj is None or apply_obj.user_id != payload.target_user_id:
+        raise HTTPException(
+            status_code=400,
+            detail="申请不存在、已处理或不属于目标用户",
+        )
+    if apply_obj.status not in ("pending", "processing"):
+        raise HTTPException(
+            status_code=400,
+            detail=f"申请当前状态为「{apply_obj.status}」，不可生成",
+        )
+
     # 文件名：前端指定或按时间戳自动生成
     filename = payload.filename or timestamp_filename(settings.dataset_name)
     if not filename.lower().endswith(".xlsx"):
@@ -203,15 +169,11 @@ def generate_filtered(
             detail=f"Excel 已生成，但推送到 Windows 云平台失败: {str(e)}",
         )
 
-    # 3. 关联申请置为完成
-    apply_obj = None
-    if payload.apply_id:
-        apply_obj = db.query(DataApply).filter(DataApply.id == payload.apply_id).first()
-        if apply_obj and apply_obj.status != "completed":
-            from datetime import datetime
-            apply_obj.status = "completed"
-            apply_obj.finished_at = datetime.utcnow()
-            apply_obj.processed_by = admin.id
+    # 3. 关联申请置为完成（apply_obj 已在上方校验并锁定）
+    from datetime import datetime
+    apply_obj.status = "completed"
+    apply_obj.finished_at = datetime.utcnow()
+    apply_obj.processed_by = admin.id
 
     # 4. 站内消息通知目标用户
     db.add(Message(

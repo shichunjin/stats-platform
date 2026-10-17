@@ -36,6 +36,9 @@
         <SmartFilter ref="filterRef" :columns="columns" @change="onFilterChange" />
       </div>
 
+      <el-alert v-if="!applyId" type="warning" :closable="false" show-icon style="margin-top: 16px"
+                title="未关联数据申请：请从「待处理申请」页面点击「筛选生成」进入本页，生成数据必须绑定用户申请" />
+
       <div class="action-bar">
         <el-button type="primary" size="large" :loading="generating" @click="generate">
           <el-icon><Check /></el-icon>&nbsp;确认生成并推送给用户
@@ -123,6 +126,11 @@ async function generate() {
     ElMessage.warning('请先选择目标用户')
     return
   }
+  // 安全修复 A1：生成必须绑定有效数据申请
+  if (!applyId) {
+    ElMessage.warning('生成必须关联数据申请，请从「待处理申请」页面点击「筛选生成」进入')
+    return
+  }
   generating.value = true
   lastResult.value = null
   try {
@@ -135,7 +143,7 @@ async function generate() {
       filters: filters.value,
       target_user_id: targetUserId.value,
       filename: finalName,
-      apply_id: applyId ? Number(applyId) : undefined,
+      apply_id: Number(applyId),
     })
     lastResult.value = { filename: res.filename, rows: res.rows }
     ElMessage.success(`数据已生成并推送给用户：${res.filename}（${res.rows} 行）`)

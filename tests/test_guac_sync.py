@@ -192,13 +192,21 @@ def test_auto_login_disabled_omits_credentials(client, db_session, guac_db, monk
 
 
 def test_drive_and_recording_paths_isolated_per_user(client, db_session, guac_db, monkeypatch):
+    """录像目录按用户隔离；虚拟盘已被 A3 强制禁用，即使配置了 drive_root 也不启用"""
     monkeypatch.setattr(settings, "guac_drive_root", "/guacd/drives")
     monkeypatch.setattr(settings, "guac_recording_root", "/guacd/records")
     client.post("/auth/register", json={"username": "iso", "password": "Ii123456"})
     _, params, _ = _query_connection(guac_db, "iso")
-    assert params["drive-path"] == "/guacd/drives/iso"
+    # 安全修复 A3：虚拟盘通道强制禁用，不得出现 drive-path
+    assert "drive-path" not in params
+    assert params["disable-drive"] == "true"
+    assert params["enable-drive"] == "false"
+    # 剪贴板/打印同样禁用
+    assert params["disable-copy"] == "true"
+    assert params["disable-paste"] == "true"
+    assert params["disable-print"] == "true"
+    # 会话录像（审计）仍启用并按用户隔离
     assert params["recording-path"] == "/guacd/records/iso"
-    assert params["enable-drive"] == "true"
     assert params["enable-recording"] == "true"
 
 
@@ -332,13 +340,14 @@ def test_session_connect_uses_dedicated_connection(client, db_session, guac_db):
     assert resp.json()["guac_url"].endswith(str(cid))
 
 
-def test_session_connect_fallback_when_sync_disabled(client, db_session, test_user, monkeypatch):
+def test_session_connect_rejects_when_sync_disabled(client, db_session, test_user, monkeypatch):
+    """安全修复 A4：未启用同步时拒绝回退到共享连接，返回 503"""
     monkeypatch.setattr(settings, "guac_db_url", "")
     login = client.post("/auth/login", json={"username": "user1", "password": "user123"})
     headers = {"Authorization": f"Bearer {login.json()['access_token']}"}
     resp = client.post("/session/connect", headers=headers)
-    assert resp.status_code == 200
-    assert settings.guacamole_connection_id in resp.json()["guac_url"]
+    assert resp.status_code == 503
+    assert "GUAC_DB_URL" in resp.json()["detail"]
 
 
 def test_session_connect_503_when_user_missing_in_guac(client, db_session, guac_db):
@@ -352,3 +361,27 @@ def test_session_connect_503_when_user_missing_in_guac(client, db_session, guac_
     headers = {"Authorization": f"Bearer {login.json()['access_token']}"}
     resp = client.post("/session/connect", headers=headers)
     assert resp.status_code == 503
+
+
+# ============================================================
+# 安全修复 A3：RDP 连接参数通道管控
+# ============================================================
+
+def test_rdp_parameters_disable_channels(monkeypatch):
+    """剪贴板/虚拟盘/打印通道必须强制禁用，不受配置影响"""
+    from app.guac import _build_rdp_parameters
+    from app.config import settings
+
+    # 即使误配置了虚拟盘/录像目录，也不得开启外带通道
+    monkeypatch.setattr(settings, "guac_drive_root", "/data/drive")
+    monkeypatch.setattr(settings, "guac_recording_root", "")
+
+    params = _build_rdp_parameters("alice", "pw")
+    assert params["disable-copy"] == "true"
+    assert params["disable-paste"] == "true"
+    assert params["disable-drive"] == "true"
+    assert params["disable-print"] == "true"
+    assert params["enable-drive"] == "false"
+    # 配置了 guac_drive_root 也不得生成 drive-path
+    assert "drive-path" not in params
+    assert "enable-drive" in params and params["enable-drive"] == "false"

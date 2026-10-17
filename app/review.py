@@ -202,14 +202,21 @@ def scan_pending_directory(pending_dir: str) -> list:
 # 与原始数据集的相似度比对（免审 / 转人工审核的依据）
 # ============================================================
 #
-# 规则（2026-10 起）：
-#   - 所有文件类型都允许申请导出，不再做扩展名白名单拦截；
-#   - 可提取文本的文件（csv/txt/out/log/tsv/dat/xlsx 等）与原始数据集
-#     testData 计算相似度：≥ EXPORT_REVIEW_SIMILARITY_THRESHOLD（默认 60%）
-#     判定为疑似原始数据，转管理员人工审核；低于阈值免审自动发布；
-#   - 无法提取文本的文件（图片、PDF、二进制等）不参与比对，免审自动发布；
+# 规则（安全修复 A2 后）：
+#   - 导出文件按扩展名门禁分三类：
+#     1) 文本类（csv/txt/out/log/tsv/dat/tab/json/xml）：与原始数据集 testData
+#        比对相似度，≥ EXPORT_REVIEW_SIMILARITY_THRESHOLD（默认 60%）转人工；
+#     2) 图片类（png/jpg/jpeg）：不可能包含行级明细，免审自动通过；
+#     3) 统计软件原生格式/压缩包/文档（dta/rds/xlsx/zip/pdf 等）：可能内嵌
+#        原始数据且无法可靠比对，一律转人工审核；
+#   - 不在以上三类中的未知类型：直接拒绝（reject）；
+#   - 二进制内容伪装成文本扩展名（如 .dta 改名 .txt）：控制字符占比检测识别，
+#     无法可靠比对，安全默认转人工；
+#   - 文本经 Base64 等编码后写入：自动解码一层并入比对；解码后仍为二进制
+#     （加密/压缩再编码）或超长不可解码 token 视为混淆，转人工；
 #   - 原始数据基线文件缺失时无法判定，安全默认转人工审核。
 
+import base64
 from collections import Counter
 
 from app.config import settings as _settings
@@ -226,6 +233,46 @@ _baseline_cache: dict = {}
 
 _ws_re = re.compile(r"\s+")
 _token_re = re.compile(r"[0-9A-Za-z_.]+")
+_B64_BLOCK_RE = re.compile(r"[A-Za-z0-9+/=]{200,}")
+
+
+def _looks_binary(raw: bytes) -> bool:
+    """采样检测二进制内容：控制字符（排除常见文本空白符）占比 > 2% 视为二进制。"""
+    sample = raw[:65536]
+    if not sample:
+        return False
+    ctrl = sum(1 for b in sample if b < 0x20 and b not in (0x09, 0x0A, 0x0D, 0x0C))
+    return ctrl / len(sample) > 0.02
+
+
+def _augment_base64_text(text: str) -> tuple[str, bool]:
+    """编码混淆防护（安全修复 A2）。
+
+    检测文本中的长 Base64 块：
+    - 能解码为可读文本（如 Base64 后的原始数据表）→ 解码内容并入比对文本；
+    - 解码后仍为二进制（对原始数据加密/压缩再编码）→ 视为混淆，返回 True；
+    - 超长且无法解码的连续 token（哈希串/密文）→ 视为混淆，返回 True。
+    返回 (增强后的文本, 是否混淆)。
+    """
+    blocks = _B64_BLOCK_RE.findall(text)
+    if not blocks:
+        return text, False
+    decoded_parts: list[str] = []
+    for block in blocks:
+        padded = block + "=" * (-len(block) % 4)
+        try:
+            raw = base64.b64decode(padded, validate=True)
+        except Exception:
+            try:
+                raw = base64.urlsafe_b64decode(padded)
+            except Exception:
+                return text, True
+        if _looks_binary(raw):
+            return text, True
+        decoded_parts.append(_decode_bytes(raw))
+    if decoded_parts:
+        text = text + "\n" + "\n".join(decoded_parts)
+    return text, False
 
 
 def _normalize_line(line: str) -> str:
@@ -317,6 +364,10 @@ def extract_comparable_text(file_path: str) -> str | None:
                 raw = f.read(_MAX_CANDIDATE_CHARS)
         except OSError:
             return ""
+        # 安全修复 A2：二进制内容伪装成文本扩展名（如 .dta/.zip/.rds 改名 .txt）
+        # 无法可靠比对，返回 None → 调用方安全默认转人工审核
+        if _looks_binary(raw):
+            return None
         for enc in ("utf-8-sig", "gbk", "latin-1"):
             try:
                 return raw.decode(enc)
@@ -337,15 +388,21 @@ def similarity_to_dataset(file_path: str, baseline_path: str | None = None
       2. token 覆盖率：候选内容的 token 有多少比例能在原始数据集中找到
          （换分隔符/去掉引号等格式变化时仍然敏感）。
     表头行（与基线表头完全相同）不计入命中，避免小文件被一个表头推高相似度。
+    候选内容中的 Base64 块会先解码再并入比对（防编码混淆绕过，安全修复 A2）。
 
-    返回 (score, reason)。score=None 表示无法判定：
-      - 基线文件缺失（调用方应安全默认转人工审核）；
-      - 文件类型无法提取文本（调用方按免审处理；即使基线缺失也免审，
-        图片/PDF/二进制不可能逐行夹带原始表格）。
+    返回 (score, reason)。score=None 表示无法判定（调用方应安全默认转人工审核）：
+      - 文件为二进制/图片类，或二进制伪装成文本；
+      - 内容疑似编码/混淆（Base64 解码后仍为二进制、超长不可解码 token）；
+      - 原始数据基线文件缺失。
     """
     text = extract_comparable_text(file_path)
     if text is None:
-        return None, "非文本类文件，不参与相似度比对"
+        return None, "无法提取可比文本（二进制/图片类），转人工审核"
+
+    # 安全修复 A2：编码混淆防护 —— Base64 等编码后的原始数据写入文本文件
+    text, obfuscated = _augment_base64_text(text)
+    if obfuscated:
+        return None, "内容疑似经编码/混淆处理且无法还原为可读文本，转人工审核"
 
     base = _load_baseline(baseline_path or _settings.dataset_csv_path)
     if base is None:
@@ -378,19 +435,55 @@ def similarity_to_dataset(file_path: str, baseline_path: str | None = None
                    f"相似度 {score * 100:.0f}%")
 
 
+# ---- 导出文件类型门禁（安全修复 A2）----
+# 文本类：可参与相似度自动判定，低于阈值可免审
+_AUTO_TEXT_EXTS = {".csv", ".txt", ".out", ".log", ".tsv", ".dat", ".tab", ".json", ".xml"}
+# 图片类：不可能包含行级明细数据，免审自动通过
+_IMAGE_EXTS = {".png", ".jpg", ".jpeg"}
+# 统计软件原生格式 / 压缩包 / 文档：可能内嵌原始数据且无法可靠比对，一律转人工
+_ALWAYS_REVIEW_EXTS = {
+    ".xlsx", ".xls", ".xlsm", ".dta", ".rds", ".rdata", ".rda", ".sav", ".por",
+    ".zip", ".7z", ".rar", ".gz", ".tgz", ".tar", ".pdf",
+    ".doc", ".docx", ".ppt", ".pptx", ".h5", ".hdf5", ".mat", ".npz",
+    ".parquet", ".feather", ".sqlite", ".db",
+}
+
+
 def decide_export_review(file_path: str, threshold: float | None = None
                          ) -> tuple[str, str, float | None]:
-    """返回 (decision, reason, score)；decision ∈ {review, auto}。
+    """返回 (decision, reason, score)；decision ∈ {review, auto, reject}。
 
-    - review：相似度达到阈值，或原始基线缺失无法判定（安全默认）；
-    - auto：相似度低于阈值，或文件不可提取文本（图片/PDF/二进制）。
+    - reject：不在允许导出的类型白名单内，直接拒绝；
+    - review：统计软件原生格式/压缩包/文档一律转人工；文本类相似度达到阈值、
+      内容疑似编码混淆、或原始基线缺失无法判定（安全默认）；
+    - auto：图片文件；或文本类相似度低于阈值且内容可读、类型可判定。
+
+    注意：auto 仅表示"免相似度审核"，调用方仍须通过 review_result 规则审查
+    （扩展名/字段白名单/敏感信息/行数）后才可发布（安全修复 B8）。
     """
     thr = _settings.export_review_similarity_threshold if threshold is None else threshold
+    ext = os.path.splitext(file_path)[1].lower()
+
+    # 1. 类型门禁：未知/未允许类型直接拒绝
+    if ext not in _AUTO_TEXT_EXTS and ext not in _IMAGE_EXTS \
+            and ext not in _ALWAYS_REVIEW_EXTS:
+        return "reject", f"不允许导出的文件类型: {ext}", None
+
+    # 2. 统计软件原生格式/压缩包/文档：无法可靠自动判定，一律转人工
+    if ext in _ALWAYS_REVIEW_EXTS:
+        return ("review",
+                "该文件类型（统计软件原生格式/压缩包/文档）可能内嵌原始数据，转管理员人工审核",
+                None)
+
+    # 3. 图片：不可能包含行级明细，免审自动通过
+    if ext in _IMAGE_EXTS:
+        return "auto", "图片文件，不包含行级明细数据，免审自动通过", None
+
+    # 4. 文本类：相似度比对 + 编码混淆防护
     score, detail = similarity_to_dataset(file_path)
     if score is None:
-        if "基线" in detail:
-            return "review", detail, None
-        return "auto", detail, None
+        # 基线缺失、二进制伪装文本、编码混淆等无法判定情形：安全默认转人工
+        return "review", detail, None
     if score >= thr:
         return "review", f"{detail}，达到/超过阈值 {thr * 100:.0f}%，需管理员审核", score
     return "auto", f"{detail}，低于阈值 {thr * 100:.0f}%，免审核自动通过", score

@@ -29,7 +29,7 @@ router = APIRouter(prefix="/session", tags=["会话"])
 
 **错误码**
 - `401`：未认证
-- `503`：Guacamole 侧未就绪（用户未同步，需修改一次密码或联系管理员）
+- `503`：Guacamole 侧未就绪（未启用 JDBC 同步，或用户未同步，需修改一次密码或联系管理员）
 """)
 def connect_session(
     user: User = Depends(get_current_user),
@@ -50,8 +50,13 @@ def connect_session(
             )
         connection_ref = str(connection_id)
     else:
-        # 旧部署（user-mapping.xml 等）：使用配置的共享连接
-        connection_ref = settings.guacamole_connection_id
+        # 安全修复 A4：未启用 Guacamole JDBC 同步时无法保证一人一专属连接，
+        # 所有用户会共享同一连接（会话串号、凭据互见），拒绝建立会话。
+        # 生产部署必须配置 GUAC_DB_URL 启用同步；本地开发同理需配置后才能联调远程桌面。
+        raise HTTPException(
+            status_code=503,
+            detail="远程桌面服务未启用用户级连接同步（GUAC_DB_URL 未配置），已拒绝共享连接，请联系管理员",
+        )
 
     session = SessionModel(
         user_id=user.id,

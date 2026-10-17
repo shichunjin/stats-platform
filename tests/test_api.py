@@ -115,31 +115,47 @@ class TestGetMe:
 class TestSessionConnect:
     """POST /session/connect 测试"""
 
-    def test_connect(self, client, test_user, auth_headers):
-        """连接 Windows 分析平台"""
+    @staticmethod
+    def _enable_sync(monkeypatch):
+        """模拟已启用 Guacamole JDBC 同步（专属连接 id=42）"""
+        monkeypatch.setattr("app.routers.session.guac_sync_enabled", lambda: True)
+        monkeypatch.setattr("app.routers.session.get_user_connection_id", lambda u: 42)
+        monkeypatch.setattr("app.routers.session.ensure_user_connection", lambda u: 42)
+
+    def test_connect(self, client, test_user, auth_headers, monkeypatch):
+        """连接 Windows 分析平台（同步已启用 → 专属连接）"""
+        self._enable_sync(monkeypatch)
         resp = client.post("/session/connect", headers=auth_headers)
         assert resp.status_code == 200
         data = resp.json()
         assert data["software"] == "windows"
         assert data["status"] == "active"
         assert "guac_url" in data
-        assert settings.guacamole_connection_id in data["guac_url"]
+        assert data["guac_url"].endswith("42")
+
+    def test_connect_rejected_when_sync_disabled(self, client, test_user, auth_headers):
+        """安全修复 A4：未启用 JDBC 同步时拒绝共享连接，返回 503"""
+        resp = client.post("/session/connect", headers=auth_headers)
+        assert resp.status_code == 503
+        assert "GUAC_DB_URL" in resp.json()["detail"]
 
     def test_connect_without_auth(self, client):
         """未认证返回 401"""
         resp = client.post("/session/connect")
         assert resp.status_code == 401
 
-    def test_connect_creates_audit_log(self, client, test_user, auth_headers, db_session):
+    def test_connect_creates_audit_log(self, client, test_user, auth_headers, db_session, monkeypatch):
         """连接创建审计日志"""
+        self._enable_sync(monkeypatch)
         client.post("/session/connect", headers=auth_headers)
         logs = db_session.query(AuditLog).filter(
             AuditLog.action == "session_connect"
         ).all()
         assert len(logs) >= 1
 
-    def test_connect_creates_session_record(self, client, test_user, auth_headers, db_session):
+    def test_connect_creates_session_record(self, client, test_user, auth_headers, db_session, monkeypatch):
         """连接创建数据库会话记录"""
+        self._enable_sync(monkeypatch)
         resp = client.post("/session/connect", headers=auth_headers)
         session_id = resp.json()["id"]
         record = db_session.query(SessionModel).filter(SessionModel.id == session_id).first()
@@ -408,8 +424,10 @@ class TestAdminPending:
 class TestEndToEnd:
     """端到端完整流程测试"""
 
-    def test_full_workflow(self, client, test_user, test_admin, auth_headers, admin_headers, pending_dir, published_dir, db_session):
+    def test_full_workflow(self, client, test_user, test_admin, auth_headers, admin_headers, pending_dir, published_dir, db_session, monkeypatch):
         """完整流程：连接 → 申请导出 → 管理员审核通过 → 下载"""
+        # 模拟已启用 Guacamole JDBC 同步（安全修复 A4 后连接需专属连接）
+        TestSessionConnect._enable_sync(monkeypatch)
 
         # 1. 验证身份
         resp = client.get("/auth/me", headers=auth_headers)

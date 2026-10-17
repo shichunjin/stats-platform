@@ -58,8 +58,9 @@ class Settings(BaseSettings):
     rds_host: str = "8.133.223.251"
     rds_port: int = 3389
     guacamole_url: str = "https://guac.chunjindevelop68.xyz/guacamole/#/client/"
-    # 兜底共享 RDP 连接 ID：仅在未配置 GUAC_DB_URL（旧 user-mapping 部署）时使用；
-    # 启用 JDBC 同步后每个用户使用各自的专属连接。
+    # 已废弃（安全修复 A4）：共享 RDP 连接 ID 的回退已移除——未启用 GUAC_DB_URL
+    # 时 /session/connect 直接 503，不再回退到共享连接（会话串号风险）。
+    # 字段仅为兼容旧 .env 保留，不再被读取。
     guacamole_connection_id: str = "1"
     # Guacamole JDBC 认证数据库连接串（如 postgresql+psycopg2://guac:***@localhost:5432/guacamole_db）。
     # 配置后：注册时同步创建 Guacamole 用户（同密码）及其专属 RDP 连接，改密时同步更新；

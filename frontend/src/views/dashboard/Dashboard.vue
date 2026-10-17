@@ -33,9 +33,7 @@
             <el-button type="primary" @click="connect">
               <el-icon><Connection /></el-icon>&nbsp;连接 Windows 分析平台
             </el-button>
-            <el-button type="success" @click="fetch" :loading="fetching">
-              <el-icon><Download /></el-icon>&nbsp;获取数据
-            </el-button>
+            <!-- 安全修复 A1：「获取数据」直拉全表入口已下线，取数统一走「申请获取数据」 -->
           </div>
         </el-card>
       </el-col>
@@ -62,17 +60,14 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
 import { useUserStore } from '@/stores/user'
 import { useMessageStore } from '@/stores/messages'
 import { connectSession } from '@/api/session'
-import { fetchData } from '@/api/data'
 
 const userStore = useUserStore()
 const messageStore = useMessageStore()
-
-const fetching = ref(false)
 
 const cards = computed(() => [
   { title: '我的申请', value: '--', icon: 'Document', color: 'linear-gradient(135deg,#2f63ff,#5b7bff)' },
@@ -92,18 +87,6 @@ async function connect() {
     ElMessage.success('已建立 Windows 分析会话')
   } catch {
     /* 拦截器处理 */
-  }
-}
-
-async function fetch() {
-  fetching.value = true
-  try {
-    const res = await fetchData()
-    ElMessage.success(`数据已生成：${res.filename}（${res.rows} 行 × ${res.columns} 列），请在 Windows 平台 W: 盘打开`)
-  } catch {
-    /* 拦截器处理 */
-  } finally {
-    fetching.value = false
   }
 }
 </script>

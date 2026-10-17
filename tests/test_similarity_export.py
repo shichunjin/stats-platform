@@ -1,10 +1,11 @@
-"""结果审查新规则测试：与原始数据集的相似度比对 + 免审自动发布。
+"""结果审查规则测试：类型门禁 + 相似度比对 + 免审自动发布（安全修复 A2/B8 后）。
 
 规则：
-- 所有文件类型都可申请导出；
-- 可提取文本文件与原始数据集 testData.csv 比对，相似度 ≥ 60% 转人工审核，
-  低于 60% 免审核自动发布（立即出现在已发布列表可下载）；
-- 图片/PDF/二进制等无法提取文本的文件免审自动发布；
+- 导出文件按扩展名门禁分三类：文本类（相似度比对）、图片类（免审）、
+  统计软件原生格式/压缩包/文档（一律转人工）；未知类型直接拒绝（reject）；
+- 文本类与原始数据集 testData.csv 比对：相似度 ≥ 60% 转人工审核，
+  低于 60% 且通过 review_result 规则审查（字段白名单/敏感信息/行数）才免审自动发布；
+- 二进制伪装文本（.dta 改名 .txt）、Base64 编码混淆：识别后安全默认转人工；
 - 原始基线缺失时安全默认转人工审核。
 """
 import pytest
@@ -97,16 +98,18 @@ def test_threshold_boundary_60_percent(tmp_path, baseline_file):
     assert round(score60, 2) == pytest.approx(0.60, abs=0.05)
     assert decision60 == "review"
 
-    # 10 行中 5 行命中 -> 0.50，低于阈值 -> 免审
+    # 10 行中 5 行命中 -> 0.50，低于阈值 -> 免审。
+    # 候选使用白名单表头（metric,value），保证通过 review_result 规则审查（B8），
+    # 仅由相似度阈值决定免审；基线行不计表头，数据行 = 表头1 + 命中5 + 全新4。
     cand50 = _write(sub, "c50.csv",
-                    BASELINE_HEADER + "\n" + "\n".join(rows[:5] + fresh))
+                    "metric,value\n" + "\n".join(rows[:5] + fresh))
     decision50, _, score50 = decide_export_review(cand50)
     assert score50 < 0.6
     assert decision50 == "auto"
 
 
 def test_binary_image_auto_even_without_comparison(tmp_path, baseline_file):
-    # PNG 魔数 + 任意二进制：无法提取文本，不参与比对，免审
+    # PNG 魔数 + 任意二进制：图片类不参与比对，免审
     cand = _write(tmp_path, "plot.png", b"\x89PNG\r\n\x1a\n" + bytes(range(256)) * 4)
     score, _ = similarity_to_dataset(cand, baseline_file)
     assert score is None
@@ -114,10 +117,57 @@ def test_binary_image_auto_even_without_comparison(tmp_path, baseline_file):
     assert decision == "auto"
 
 
-def test_pdf_binary_auto(tmp_path, baseline_file):
+def test_stats_native_and_archive_always_review(tmp_path, baseline_file):
+    # 安全修复 A2：统计软件原生格式/压缩包可能内嵌原始数据，一律转人工
+    dta = _write(tmp_path, "data.dta", b"<stata dta binary>" + bytes(range(256)))
+    assert decide_export_review(dta)[0] == "review"
+    rds = _write(tmp_path, "model.rds", b"X\n" + bytes(range(256)))
+    assert decide_export_review(rds)[0] == "review"
+    zipped = _write(tmp_path, "archive.zip", b"PK\x03\x04" + bytes(64))
+    assert decide_export_review(zipped)[0] == "review"
+
+
+def test_unknown_extension_rejected(tmp_path, baseline_file):
+    # 安全修复 A2：未知类型直接拒绝
+    cand = _write(tmp_path, "payload.exe", b"MZ" + bytes(64))
+    decision, reason, score = decide_export_review(cand)
+    assert decision == "reject" and score is None
+    assert "不允许" in reason
+
+
+def test_binary_disguised_as_text_forces_review(tmp_path, baseline_file):
+    # 安全修复 A2：.dta 改名 .txt —— 控制字符占比检测识别为二进制，转人工
+    cand = _write(tmp_path, "fake.txt", bytes(range(256)) * 8)
+    score, reason = similarity_to_dataset(cand, baseline_file)
+    assert score is None
+    assert decide_export_review(cand)[0] == "review"
+
+
+def test_base64_encoded_baseline_forces_review(tmp_path, baseline_file):
+    # 安全修复 A2：把原始数据 Base64 编码后写成 .txt 绕过比对 —— 解码后应命中基线
+    import base64 as _b64
+    payload = (BASELINE_HEADER + "\n" + "\n".join(_baseline_rows()[:10])).encode("utf-8")
+    cand = _write(tmp_path, "encoded.txt", _b64.b64encode(payload).decode("ascii"))
+    decision, reason, score = decide_export_review(cand)
+    assert decision == "review"
+    assert score is not None and score >= 0.6
+
+
+def test_base64_of_encrypted_blob_forces_review(tmp_path, baseline_file):
+    # 安全修复 A2：加密/压缩内容再 Base64 —— 解码后仍为二进制，视为混淆，转人工
+    import base64 as _b64
+    blob = bytes(range(256)) * 8
+    cand = _write(tmp_path, "blob.txt", _b64.b64encode(blob).decode("ascii"))
+    score, _ = similarity_to_dataset(cand, baseline_file)
+    assert score is None
+    assert decide_export_review(cand)[0] == "review"
+
+
+def test_pdf_binary_always_review(tmp_path, baseline_file):
+    # 安全修复 A2：PDF 可能内嵌数据表，不再免审，一律转人工
     cand = _write(tmp_path, "report.pdf", b"%PDF-1.7\n" + b"\x00\x01binary" * 100)
     decision, _, score = decide_export_review(cand)
-    assert decision == "auto" and score is None
+    assert decision == "review" and score is None
 
 
 def test_missing_baseline_forces_review(tmp_path, monkeypatch):
@@ -130,6 +180,8 @@ def test_missing_baseline_forces_review(tmp_path, monkeypatch):
 
 
 def test_empty_file_is_zero_similarity(tmp_path, baseline_file):
+    # 空文件相似度为 0。注意：decide_export_review 只做类型门禁+相似度判定，
+    # review_result 规则审查（CSV 为空 → 不通过）在 API 层叠加（见下方 API 用例）
     cand = _write(tmp_path, "empty.csv", "")
     score, _ = similarity_to_dataset(cand, baseline_file)
     assert score == 0.0
@@ -152,7 +204,8 @@ def test_gbk_baseline_and_candidate(tmp_path, monkeypatch):
     assert decision == "review"
 
 
-def test_xlsx_extracted_and_low_similarity_auto(tmp_path, baseline_file):
+def test_xlsx_extracted_and_always_review(tmp_path, baseline_file):
+    # 安全修复 A2：xlsx 可提取文本参与比对，但属于文档类型，一律转人工
     from openpyxl import Workbook
     wb = Workbook()
     ws = wb.active
@@ -165,7 +218,9 @@ def test_xlsx_extracted_and_low_similarity_auto(tmp_path, baseline_file):
     assert text is not None and "zzz_special_coef" in text
     score, _ = similarity_to_dataset(str(p), baseline_file)
     assert score is not None and score < 0.6
-    assert decide_export_review(str(p))[0] == "auto"
+    decision, reason, _ = decide_export_review(str(p))
+    assert decision == "review"
+    assert "人工审核" in reason
 
 
 # ---------------- API：/results/request-export 端到端 ----------------
@@ -252,3 +307,48 @@ def test_api_mixed_batch_split_review_and_auto(
     pending_waiting = [p["file_name"] for p in mine["pending"] if p["status"] == "pending"]
     assert pending_waiting == ["raw.csv"]
     assert sorted(p["result_name"] for p in mine["published"]) == ["img.png", "summary.csv"]
+
+
+def test_api_stats_native_stays_pending(
+        client, auth_headers, pending_dir, baseline_file, monkeypatch):
+    # 安全修复 A2：.dta 等统计软件原生格式不再免审，转人工
+    monkeypatch.setattr(settings, "dataset_csv_path", baseline_file)
+    with open(f"{pending_dir}/export.dta", "wb") as f:
+        f.write(b"<stata dta>" + bytes(range(256)))
+    body = client.post("/results/request-export", headers=auth_headers).json()
+    assert body["registered"] == 1
+    assert body["auto_approved"] == 0
+    assert body["rejected"] == 0
+
+    mine = client.get("/results/mine", headers=auth_headers).json()
+    assert mine["published"] == []
+    assert [p["file_name"] for p in mine["pending"]] == ["export.dta"]
+
+
+def test_api_unknown_type_rejected(client, auth_headers, pending_dir):
+    # 安全修复 A2：未知类型直接拒绝，登记为 rejected 且不发布
+    with open(f"{pending_dir}/tool.exe", "wb") as f:
+        f.write(b"MZ" + bytes(64))
+    body = client.post("/results/request-export", headers=auth_headers).json()
+    assert body["rejected"] == 1
+    assert body["rejected_files"][0]["file_name"] == "tool.exe"
+    assert body["auto_approved"] == 0
+
+    mine = client.get("/results/mine", headers=auth_headers).json()
+    assert mine["published"] == []
+    assert [p["status"] for p in mine["pending"]] == ["rejected"]
+
+
+def test_api_empty_csv_blocked_by_rule_review(
+        client, auth_headers, pending_dir, baseline_file, monkeypatch):
+    # 安全修复 B8：空 CSV 相似度为 0，但未通过 review_result（CSV 为空）→ 转人工
+    monkeypatch.setattr(settings, "dataset_csv_path", baseline_file)
+    with open(f"{pending_dir}/empty.csv", "wb") as f:
+        f.write(b"")
+    body = client.post("/results/request-export", headers=auth_headers).json()
+    assert body["registered"] == 1
+    assert body["auto_approved"] == 0
+    assert "空" in body["files"][0]["reason"]
+
+    mine = client.get("/results/mine", headers=auth_headers).json()
+    assert mine["published"] == []
