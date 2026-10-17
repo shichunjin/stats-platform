@@ -57,7 +57,7 @@ class Settings(BaseSettings):
     # 远程桌面
     rds_host: str = "8.133.223.251"
     rds_port: int = 3389
-    guacamole_url: str = "http://47.117.171.130:8080/guacamole/#/client/"
+    guacamole_url: str = "https://guac.chunjindevelop68.xyz/guacamole/#/client/"
     # 兜底共享 RDP 连接 ID：仅在未配置 GUAC_DB_URL（旧 user-mapping 部署）时使用；
     # 启用 JDBC 同步后每个用户使用各自的专属连接。
     guacamole_connection_id: str = "1"

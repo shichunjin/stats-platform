@@ -406,7 +406,7 @@ uvicorn app.main:app --host 0.0.0.0 --port 8000
 | `FILESERVER_ROOT` | `\\fileserver` | 否 | 文件服务器根路径 |
 | `RDS_HOST` | `8.133.223.251` | 否 | RDS 服务器地址（Windows 云主机 IP） |
 | `RDS_PORT` | `3389` | 否 | RDP 端口 |
-| `GUACAMOLE_URL` | `https://guac.chunjindevelop68.xyz/#/client/` | 否 | Guacamole 前端地址 |
+| `GUACAMOLE_URL` | `https://guac.chunjindevelop68.xyz/guacamole/#/client/` | 否 | Guacamole 前端地址 |
 | `RSTUDIO_PATH` | `C:\Program Files\RStudio\bin\rstudio.exe` | 否 | RStudio 安装路径 |
 | `MPLUS_PATH` | `C:\Program Files\Mplus\mplus.exe` | 否 | Mplus 安装路径 |
 | `STATA_PATH` | `C:\Program Files\Stata18\StataSE-64.exe` | 否 | Stata 安装路径 |
