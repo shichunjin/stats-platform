@@ -1,14 +1,325 @@
+/* ============================================================
+ * 数据分析托管平台 — 全局设计系统
+ * 分层：设计令牌 → Element Plus 主题覆写 → 通用组件样式 → 工具类
+ * ============================================================ */
+
+/* ---------- 1. 设计令牌 ---------- */
 :root {
-  --color-primary: #409eff;
+  /* 主色：科技靛蓝 */
+  --color-primary: #2f63ff;
+  --color-primary-hover: #1f4fe6;
+  --color-primary-active: #1740bd;
+  --color-primary-bg: #eaf0ff;
+  --color-primary-soft: #f4f7ff;
+
+  /* 辅助色 */
+  --color-success: #10b981;
+  --color-warning: #f59e0b;
+  --color-danger: #ef4444;
+  --color-info: #64748b;
+
+  /* 文字 */
+  --text-title: #0f172a;
+  --text-primary: #1e293b;
+  --text-regular: #334155;
+  --text-secondary: #64748b;
+  --text-placeholder: #94a3b8;
+  --text-disabled: #cbd5e1;
+
+  /* 结构 */
+  --border: #e2e8f0;
+  --border-light: #eef2f7;
+  --divider: #f1f5f9;
+  --bg-app: #f5f7fa;
+  --bg-surface: #ffffff;
+  --bg-hover: #f8fafc;
+  --bg-mask: rgba(15, 23, 42, 0.45);
+
+  /* 业务状态色 */
+  --status-pending: #f59e0b;
+  --status-running: #2f63ff;
+  --status-done: #10b981;
+  --status-reject: #ef4444;
+  --status-expired: #94a3b8;
+  --status-auto: #14b8a6;
+
+  /* 字体 */
+  --font-sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC',
+    'Microsoft YaHei', sans-serif;
+  --fs-xs: 12px;
+  --fs-sm: 13px;
+  --fs-base: 14px;
+  --fs-md: 16px;
+  --fs-lg: 18px;
+  --fs-xl: 20px;
+  --fs-2xl: 24px;
+  --fs-3xl: 30px;
+  --fw-regular: 400;
+  --fw-medium: 500;
+  --fw-semibold: 600;
+  --fw-bold: 700;
+
+  /* 间距 */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-8: 32px;
+  --space-10: 40px;
+  --space-12: 48px;
+
+  /* 圆角 */
+  --radius-sm: 6px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+  --radius-xl: 16px;
+  --radius-full: 999px;
+
+  /* 阴影 */
+  --shadow-sm: 0 1px 2px rgba(15, 23, 42, 0.06);
+  --shadow-md: 0 4px 12px rgba(15, 23, 42, 0.08);
+  --shadow-lg: 0 12px 32px rgba(15, 23, 42, 0.12);
+  --shadow-card: 0 1px 3px rgba(15, 23, 42, 0.04), 0 1px 2px rgba(15, 23, 42, 0.03);
+  --shadow-card-hover: 0 8px 24px rgba(15, 23, 42, 0.1);
 }
 
-html, body, #app {
+/* ---------- 2. Element Plus 主题覆写 ---------- */
+:root {
+  --el-color-primary: var(--color-primary);
+  --el-color-primary-light-3: #5b82ff;
+  --el-color-primary-light-5: #8aa5ff;
+  --el-color-primary-light-7: #b8c9ff;
+  --el-color-primary-light-8: #d4dfff;
+  --el-color-primary-light-9: var(--color-primary-bg);
+  --el-color-primary-dark-2: var(--color-primary-active);
+
+  --el-color-success: var(--color-success);
+  --el-color-warning: var(--color-warning);
+  --el-color-danger: var(--color-danger);
+  --el-color-info: var(--color-info);
+
+  --el-text-color-primary: var(--text-primary);
+  --el-text-color-regular: var(--text-regular);
+  --el-text-color-secondary: var(--text-secondary);
+  --el-text-color-placeholder: var(--text-placeholder);
+
+  --el-border-color: var(--border);
+  --el-border-color-light: var(--border-light);
+  --el-border-color-lighter: var(--divider);
+  --el-fill-color-blank: #fff;
+  --el-fill-color-light: var(--bg-hover);
+
+  --el-border-radius-base: var(--radius-md);
+  --el-font-size-base: var(--fs-base);
+}
+
+/* ---------- 3. 基础元素 ---------- */
+html,
+body,
+#app {
   height: 100%;
   margin: 0;
   padding: 0;
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+  font-family: var(--font-sans);
+  color: var(--text-primary);
+  background: var(--bg-app);
+  -webkit-font-smoothing: antialiased;
 }
 
-* { box-sizing: border-box; }
+* {
+  box-sizing: border-box;
+}
 
-a { color: inherit; text-decoration: none; }
+a {
+  color: inherit;
+  text-decoration: none;
+}
+
+/* ---------- 4. 通用组件样式 ---------- */
+
+/* 按钮 */
+.el-button {
+  border-radius: var(--radius-md);
+  font-weight: var(--fw-medium);
+  padding: 8px 16px;
+  transition: all 0.18s ease;
+}
+.el-button--primary {
+  box-shadow: 0 2px 6px rgba(47, 99, 255, 0.25);
+}
+.el-button--primary:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 6px 14px rgba(47, 99, 255, 0.32);
+}
+.el-button--default {
+  background: #fff;
+  color: var(--text-regular);
+}
+.el-button--default:hover {
+  color: var(--color-primary);
+  border-color: var(--color-primary);
+  background: var(--color-primary-soft);
+}
+
+/* 输入框 */
+.el-input__wrapper,
+.el-textarea__inner {
+  border-radius: var(--radius-md);
+  box-shadow: 0 0 0 1px var(--border) inset;
+  transition: box-shadow 0.18s ease;
+}
+.el-input__wrapper.is-focus,
+.el-textarea__inner:focus {
+  box-shadow: 0 0 0 1px var(--color-primary) inset,
+    0 0 0 3px rgba(47, 99, 255, 0.12);
+}
+
+/* 表格 */
+.el-table {
+  --el-table-border-color: var(--divider);
+  --el-table-header-bg-color: var(--bg-app);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+}
+.el-table th.el-table__cell {
+  background: var(--bg-app);
+  color: var(--text-title);
+  font-weight: var(--fw-semibold);
+}
+.el-table tr:hover > td.el-table__cell {
+  background: var(--color-primary-soft) !important;
+}
+.el-table .el-table__row--striped td.el-table__cell {
+  background: var(--bg-hover);
+}
+
+/* 弹窗 */
+.el-dialog {
+  border-radius: var(--radius-xl);
+  overflow: hidden;
+  box-shadow: var(--shadow-lg);
+}
+.el-overlay {
+  background: var(--bg-mask);
+  backdrop-filter: blur(4px);
+}
+.el-dialog__body {
+  padding: 20px 24px;
+}
+
+/* 标签 */
+.el-tag {
+  border-radius: var(--radius-full);
+  padding: 0 10px;
+  height: 22px;
+  line-height: 20px;
+  font-size: var(--fs-xs);
+  border: none;
+}
+
+/* 分页 */
+.el-pagination {
+  font-weight: var(--fw-medium);
+}
+.el-pagination.is-background .el-pager li.is-active {
+  background: var(--color-primary);
+}
+
+/* 消息提示 */
+.el-message {
+  border-radius: 10px;
+  padding: 12px 16px;
+  box-shadow: var(--shadow-md);
+}
+.el-message--success {
+  border-left: 3px solid var(--color-success);
+}
+.el-message--warning {
+  border-left: 3px solid var(--color-warning);
+}
+.el-message--error {
+  border-left: 3px solid var(--color-danger);
+}
+.el-message--info {
+  border-left: 3px solid var(--color-info);
+}
+
+/* ---------- 5. 工具类 ---------- */
+
+/* 页面标题区 */
+.page-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  margin-bottom: var(--space-4);
+}
+.page-header__title {
+  font-size: var(--fs-xl);
+  font-weight: var(--fw-semibold);
+  color: var(--text-title);
+}
+.page-header__desc {
+  font-size: var(--fs-sm);
+  color: var(--text-secondary);
+  margin-top: 4px;
+}
+
+/* 卡片 */
+.card {
+  background: var(--bg-surface);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-card);
+  transition: box-shadow 0.2s ease, transform 0.2s ease;
+}
+.card--hover:hover {
+  transform: translateY(-2px);
+  box-shadow: var(--shadow-card-hover);
+}
+.card__body {
+  padding: var(--space-5);
+}
+
+/* 状态光点 */
+.status-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  margin-right: 6px;
+  vertical-align: middle;
+}
+.status-dot--pending { background: var(--status-pending); }
+.status-dot--running { background: var(--status-running); }
+.status-dot--done { background: var(--status-done); }
+.status-dot--reject { background: var(--status-reject); }
+.status-dot--expired { background: var(--status-expired); }
+.status-dot--auto { background: var(--status-auto); }
+
+/* 业务状态标签 */
+.tag-pending { color: var(--status-pending); background: rgba(245, 158, 11, 0.12); }
+.tag-running { color: var(--status-running); background: rgba(47, 99, 255, 0.12); }
+.tag-done { color: var(--status-done); background: rgba(16, 185, 129, 0.12); }
+.tag-reject { color: var(--status-reject); background: rgba(239, 68, 68, 0.12); }
+.tag-expired { color: var(--status-expired); background: rgba(148, 163, 184, 0.12); }
+.tag-auto { color: var(--status-auto); background: rgba(20, 184, 166, 0.12); }
+
+/* 滚动条 */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-thumb {
+  background: #cbd5e1;
+  border-radius: 4px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #94a3b8;
+}
+
+/* 数字等宽 */
+.tnum {
+  font-variant-numeric: tabular-nums;
+}

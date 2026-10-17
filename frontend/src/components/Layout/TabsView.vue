@@ -2,7 +2,6 @@
   <div class="tabs-bar">
     <el-tabs
       v-model="active"
-      type="card"
       closable
       @tab-remove="onRemove"
       @tab-click="onClick"
@@ -57,9 +56,44 @@ function onClick(tab: any) {
 <style scoped>
 .tabs-bar {
   background: #fff;
-  padding: 6px 12px 0;
-  border-bottom: 1px solid #e6e6e6;
+  padding: 0 12px;
+  border-bottom: 1px solid var(--border);
 }
-.tabs-bar :deep(.el-tabs__header) { margin: 0; }
-.tabs-bar :deep(.el-tabs__nav) { border: none; }
+.tabs-bar :deep(.el-tabs__header) {
+  margin: 0;
+}
+.tabs-bar :deep(.el-tabs__nav-wrap::after) {
+  display: none;
+}
+.tabs-bar :deep(.el-tabs__item) {
+  height: 40px;
+  line-height: 40px;
+  padding: 0 16px;
+  color: var(--text-secondary);
+  font-size: 13px;
+  border: none;
+  transition: color 0.18s ease;
+}
+.tabs-bar :deep(.el-tabs__item:hover) {
+  color: var(--text-primary);
+  background: var(--bg-hover);
+}
+.tabs-bar :deep(.el-tabs__item.is-active) {
+  color: var(--color-primary);
+  font-weight: 600;
+}
+.tabs-bar :deep(.el-tabs__active-bar) {
+  height: 2px;
+  background: var(--color-primary);
+  border-radius: 2px;
+}
+.tabs-bar :deep(.el-tabs__item .is-icon-close) {
+  margin-left: 6px;
+  border-radius: 50%;
+  transition: background 0.18s ease;
+}
+.tabs-bar :deep(.el-tabs__item .is-icon-close:hover) {
+  background: rgba(0, 0, 0, 0.1);
+  color: var(--color-danger);
+}
 </style>

@@ -2,17 +2,19 @@
   <el-container class="layout">
     <el-aside :width="collapsed ? '64px' : '220px'" class="sider">
       <div class="logo">
-        <span v-if="!collapsed">数据分析托管平台</span>
-        <span v-else>数</span>
+        <span class="logo-mark">
+          <el-icon><DataLine /></el-icon>
+        </span>
+        <span v-if="!collapsed" class="logo-text">数据分析托管平台</span>
       </div>
       <el-menu
         :default-active="activeMenu"
         :collapse="collapsed"
         :collapse-transition="false"
         router
-        background-color="#001529"
-        text-color="#bfcbd9"
-        active-text-color="#409eff"
+        background-color="#0b1220"
+        text-color="rgba(255,255,255,0.72)"
+        active-text-color="#ffffff"
       >
         <template v-for="item in menuList" :key="item.path">
           <el-menu-item :index="item.path">
@@ -231,31 +233,153 @@ function toggleFullscreen() {
 
 <style scoped>
 .layout { height: 100vh; }
-.sider { background: #001529; transition: width 0.2s; overflow: hidden; }
-.logo {
-  height: 60px; display: flex; align-items: center; justify-content: center;
-  color: #fff; font-size: 16px; font-weight: 600; letter-spacing: 1px;
-  border-bottom: 1px solid #1f2d3d;
-}
-.sider :deep(.el-menu) { border-right: none; }
 
+/* 侧栏 */
+.sider {
+  background: linear-gradient(180deg, #0b1220 0%, #0e1726 100%);
+  transition: width 0.2s ease;
+  overflow: hidden;
+}
+.logo {
+  height: 60px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+}
+.logo-mark {
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: linear-gradient(135deg, #2f63ff, #6366f1);
+  color: #fff;
+  font-size: 18px;
+  flex-shrink: 0;
+  box-shadow: 0 4px 12px rgba(47, 99, 255, 0.4);
+}
+.logo-text {
+  color: #fff;
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: 0.5px;
+  white-space: nowrap;
+}
+.sider :deep(.el-menu) { border-right: none; background: transparent; }
+.sider :deep(.el-menu-item) {
+  height: 46px;
+  line-height: 46px;
+  margin: 2px 8px;
+  border-radius: 8px;
+  border-left: 3px solid transparent;
+  transition: background 0.18s ease, color 0.18s ease;
+}
+.sider :deep(.el-menu-item:hover) {
+  background: rgba(255, 255, 255, 0.06) !important;
+  color: #fff !important;
+}
+.sider :deep(.el-menu-item.is-active) {
+  background: rgba(47, 99, 255, 0.16) !important;
+  color: #fff !important;
+  font-weight: 600;
+  border-left-color: var(--color-primary);
+}
+.sider :deep(.el-menu-item .el-icon) {
+  color: rgba(255, 255, 255, 0.55);
+}
+.sider :deep(.el-menu-item.is-active .el-icon) {
+  color: #fff;
+}
+
+/* 顶栏 */
 .header {
-  background: #fff; display: flex; align-items: center; justify-content: space-between;
-  border-bottom: 1px solid #e6e6e6; padding: 0 20px; height: 60px;
+  background: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  border-bottom: 1px solid var(--border);
+  padding: 0 20px;
+  height: 60px;
 }
 .left { display: flex; align-items: center; gap: 16px; }
-.collapse-btn { font-size: 20px; cursor: pointer; color: #666; }
+.collapse-btn {
+  font-size: 20px;
+  cursor: pointer;
+  color: var(--text-secondary);
+  width: 36px;
+  height: 36px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 8px;
+  transition: background 0.18s ease, color 0.18s ease;
+}
+.collapse-btn:hover {
+  background: var(--color-primary-soft);
+  color: var(--color-primary);
+}
 .right { display: flex; align-items: center; gap: 18px; }
-.icon-btn { font-size: 20px; cursor: pointer; color: #666; }
+.icon-btn {
+  font-size: 20px;
+  cursor: pointer;
+  color: var(--text-secondary);
+  width: 36px;
+  height: 36px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 8px;
+  transition: background 0.18s ease, color 0.18s ease;
+}
+.icon-btn:hover {
+  background: var(--color-primary-soft);
+  color: var(--color-primary);
+}
 .bell { cursor: pointer; }
-.user-info { display: flex; align-items: center; gap: 8px; cursor: pointer; }
-.username { font-size: 14px; }
+.user-info {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  padding: 4px 8px;
+  border-radius: 8px;
+  transition: background 0.18s ease;
+}
+.user-info:hover { background: var(--bg-hover); }
+.username { font-size: 14px; color: var(--text-regular); }
 
-.main { background: #f0f2f5; padding: 16px; }
+.main { background: var(--bg-app); padding: 20px; }
 
-.msg-pop .msg-header { display: flex; justify-content: space-between; margin-bottom: 8px; font-weight: 600; }
-.msg-item { padding: 8px 4px; border-bottom: 1px solid #f0f0f0; cursor: pointer; }
-.msg-item.unread { background: #ecf5ff; }
-.msg-title { font-size: 13px; font-weight: 500; }
-.msg-content { font-size: 12px; color: #999; margin-top: 2px; }
+/* 消息通知 */
+.msg-pop .msg-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 8px;
+  font-weight: 600;
+  color: var(--text-title);
+}
+.msg-item {
+  padding: 10px 4px;
+  border-bottom: 1px solid var(--divider);
+  cursor: pointer;
+  border-left: 3px solid transparent;
+  padding-left: 10px;
+  transition: background 0.18s ease;
+}
+.msg-item:hover { background: var(--bg-hover); }
+.msg-item.unread {
+  background: var(--color-primary-soft);
+  border-left-color: var(--color-primary);
+}
+.msg-title { font-size: 13px; font-weight: 500; color: var(--text-primary); }
+.msg-content {
+  font-size: 12px;
+  color: var(--text-secondary);
+  margin-top: 4px;
+  line-height: 1.5;
+}
 </style>
