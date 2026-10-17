@@ -1,12 +1,20 @@
 <template>
-  <el-card>
-    <template #header>申请获取数据</template>
+  <el-card shadow="never" class="card">
+    <template #header>
+      <div class="page-header" style="margin:0">
+        <div>
+          <div class="page-header__title">申请获取数据</div>
+          <div class="page-header__desc">填写用途与所需字段，提交后等待管理员分配数据</div>
+        </div>
+      </div>
+    </template>
     <el-form ref="formRef" :model="form" :rules="rules" label-width="100px" style="max-width: 720px">
+      <div class="section-title">申请信息</div>
       <el-form-item label="数据用途" prop="purpose">
-        <el-input v-model="form.purpose" type="textarea" :rows="3" placeholder="请描述数据用途" />
+        <el-input v-model="form.purpose" type="textarea" :rows="3" placeholder="请描述数据用途（必填）" />
       </el-form-item>
       <el-form-item label="所需字段" prop="fields">
-        <el-select v-model="form.fields" multiple filterable placeholder="选择需要的字段" style="width: 100%">
+        <el-select v-model="form.fields" multiple filterable collapse-tags collapse-tags-tooltip placeholder="选择需要的字段" style="width: 100%">
           <el-option v-for="f in fieldOptions" :key="f" :label="f" :value="f" />
         </el-select>
       </el-form-item>
@@ -77,3 +85,15 @@ function reset() {
   formRef.value?.resetFields()
 }
 </script>
+
+<style scoped>
+.section-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-title);
+  margin: 8px 0 16px;
+  padding-left: 8px;
+  border-left: 3px solid var(--color-primary);
+  line-height: 1;
+}
+</style>

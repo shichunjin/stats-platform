@@ -1,8 +1,11 @@
 <template>
-  <el-card>
+  <el-card shadow="never" class="card">
     <template #header>
-      <div style="display:flex;justify-content:space-between;align-items:center;">
-        <span>消息中心</span>
+      <div class="page-header" style="margin:0">
+        <div>
+          <div class="page-header__title">消息中心</div>
+          <div class="page-header__desc">系统通知与审核结果</div>
+        </div>
         <el-button size="small" @click="readAll">全部已读</el-button>
       </div>
     </template>
@@ -12,11 +15,12 @@
         :key="m.id"
         :type="timelineType(m.type)"
         :timestamp="m.created_at"
+        placement="top"
       >
         <div class="msg-card" :class="{ unread: !m.read }" @click="onClick(m)">
           <div class="msg-title">
             {{ m.title }}
-            <el-tag v-if="!m.read" size="small" type="danger" style="margin-left: 8px;">未读</el-tag>
+            <span v-if="!m.read" class="unread-dot"></span>
           </div>
           <div class="msg-content">{{ m.content }}</div>
         </div>
@@ -52,8 +56,32 @@ function readAll() {
 </script>
 
 <style scoped>
-.msg-card { padding: 4px 8px; cursor: pointer; border-radius: 4px; }
-.msg-card.unread { background: #ecf5ff; }
-.msg-title { font-weight: 500; }
-.msg-content { font-size: 13px; color: #909399; margin-top: 4px; }
+.msg-card {
+  padding: 12px 14px;
+  cursor: pointer;
+  border-radius: var(--radius-md);
+  transition: background 0.18s ease;
+}
+.msg-card:hover { background: var(--bg-hover); }
+.msg-card.unread { background: var(--color-primary-soft); border-left: 3px solid var(--color-primary); }
+.msg-title {
+  font-weight: 600;
+  color: var(--text-title);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.unread-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--color-primary);
+  flex-shrink: 0;
+}
+.msg-content {
+  font-size: 13px;
+  color: var(--text-secondary);
+  margin-top: 6px;
+  line-height: 1.5;
+}
 </style>

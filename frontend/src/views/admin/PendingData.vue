@@ -1,9 +1,15 @@
 <template>
-  <el-card>
+  <el-card shadow="never" class="card">
     <template #header>
-      <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;">
-        <span>待处理数据申请</span>
-        <div style="display:flex;gap:8px;flex-wrap:wrap;">
+      <div class="page-header" style="margin:0">
+        <div>
+          <div class="page-header__title">
+            待处理数据申请
+            <el-badge :value="filteredList.length" class="count-badge" />
+          </div>
+          <div class="page-header__desc">审核用户的数据获取申请，分配或驳回</div>
+        </div>
+        <div class="filter-bar">
           <el-select v-model="applicantFilter" placeholder="按申请人筛选" clearable filterable style="width: 150px">
             <el-option v-for="name in applicantOptions" :key="name" :label="name" :value="name" />
           </el-select>
@@ -35,16 +41,19 @@
       <el-table-column prop="purpose" label="用途" show-overflow-tooltip />
       <el-table-column label="优先级" width="90" sortable="custom">
         <template #default="{ row }">
-          <el-tag :type="priorityType(row.priority)" size="small">{{ priorityText(row.priority) }}</el-tag>
+          <span class="tag" :class="priorityTag(row.priority)">{{ priorityText(row.priority) }}</span>
         </template>
       </el-table-column>
-      <el-table-column label="状态" width="100">
+      <el-table-column label="状态" width="110">
         <template #default="{ row }">
-          <el-tag :type="statusType(row.status)" size="small">{{ statusText(row.status) }}</el-tag>
+          <span class="status-cell">
+            <span class="status-dot" :class="`status-dot--${statusDot(row.status)}`"></span>
+            <span class="tag" :class="statusTag(row.status)">{{ statusText(row.status) }}</span>
+          </span>
         </template>
       </el-table-column>
       <el-table-column prop="apply_time" label="申请时间" width="170" sortable="custom" />
-      <el-table-column label="操作" width="200" fixed="right">
+      <el-table-column label="操作" width="220" fixed="right">
         <template #default="{ row }">
           <el-button link type="primary" @click="openDetail(row)">详情</el-button>
           <el-button v-if="row.status === 'pending'" type="success" link @click="goFilter(row)">分配数据</el-button>
@@ -287,11 +296,30 @@ async function confirmBatchReject() {
   }
 }
 
-const statusType = (s: string) =>
-  ({ pending: 'info', processing: 'warning', completed: 'success', rejected: 'danger' } as Record<string, string>)[s] || 'info'
+const statusTag = (s: string) =>
+  ({ pending: 'tag-pending', processing: 'tag-running', completed: 'tag-done', rejected: 'tag-reject' } as Record<string, string>)[s] || 'tag-pending'
+const statusDot = (s: string) =>
+  ({ pending: 'pending', processing: 'running', completed: 'done', rejected: 'reject' } as Record<string, string>)[s] || 'pending'
 const statusText = (s: string) =>
   ({ pending: '待审核', processing: '处理中', completed: '已完成', rejected: '已驳回' } as Record<string, string>)[s] || s
-const priorityType = (p: string) =>
-  ({ low: 'info', medium: 'warning', high: 'danger' } as Record<string, string>)[p] || 'info'
+const priorityTag = (p: string) =>
+  ({ low: 'tag-expired', medium: 'tag-pending', high: 'tag-reject' } as Record<string, string>)[p] || 'tag-expired'
 const priorityText = (p: string) => ({ low: '低', medium: '中', high: '高' } as Record<string, string>)[p] || p
 </script>
+
+<style scoped>
+.page-header { align-items: center; margin-bottom: 0; }
+.filter-bar { display: flex; gap: 8px; flex-wrap: wrap; }
+.count-badge { margin-left: 8px; }
+.status-cell { display: inline-flex; align-items: center; gap: 4px; }
+.tag {
+  display: inline-block;
+  padding: 2px 10px;
+  border-radius: var(--radius-full);
+  font-size: var(--fs-xs);
+  line-height: 18px;
+  background: var(--color-primary-bg);
+  color: var(--color-primary);
+}
+.batch-bar { display: flex; align-items: center; gap: 8px; color: var(--text-regular); }
+</style>

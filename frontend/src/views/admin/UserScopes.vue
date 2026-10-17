@@ -1,12 +1,22 @@
 <template>
-  <el-card>
-    <template #header>用户数据权限分配</template>
+  <el-card shadow="never" class="card">
+    <template #header>
+      <div class="page-header" style="margin:0">
+        <div>
+          <div class="page-header__title">用户数据权限分配</div>
+          <div class="page-header__desc">为用户分配所属部门与可访问的项目数据范围</div>
+        </div>
+      </div>
+    </template>
+
     <el-form label-width="100px" style="max-width: 720px">
       <el-form-item label="选择用户">
-        <el-select v-model="selectedUserId" @change="onUserSelect" filterable style="width: 100%">
+        <el-select v-model="selectedUserId" @change="onUserSelect" filterable placeholder="请选择用户" style="width: 100%">
           <el-option v-for="u in users" :key="u.id" :label="`${u.display_name || u.username} (${u.username})`" :value="u.id" />
         </el-select>
       </el-form-item>
+
+      <div class="section-title">权限配置</div>
       <el-form-item label="所属部门">
         <el-select v-model="deptId" placeholder="无" clearable style="width: 100%">
           <el-option v-for="d in depts" :key="d.id" :label="d.scope_name" :value="d.id" />
@@ -14,7 +24,7 @@
       </el-form-item>
       <el-form-item label="项目范围">
         <el-checkbox-group v-model="scopeIds">
-          <el-checkbox v-for="p in projects" :key="p.id" :value="p.id">{{ p.scope_name }}</el-checkbox>
+          <el-checkbox v-for="p in projects" :key="p.id" :value="p.id" border>{{ p.scope_name }}</el-checkbox>
         </el-checkbox-group>
       </el-form-item>
       <el-form-item>
@@ -72,3 +82,15 @@ async function save() {
   }
 }
 </script>
+
+<style scoped>
+.section-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-title);
+  margin: 8px 0 16px;
+  padding-left: 8px;
+  border-left: 3px solid var(--color-primary);
+  line-height: 1;
+}
+</style>

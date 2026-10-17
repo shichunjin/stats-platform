@@ -1,10 +1,15 @@
 <template>
   <div class="data-filter">
-    <el-card>
+    <el-card shadow="never" class="card">
       <template #header>
-        <div style="display:flex;justify-content:space-between;align-items:center;">
-          <span>数据筛选与生成</span>
-          <el-tag v-if="applyId">申请ID: {{ applyId }}</el-tag>
+        <div class="page-header" style="margin:0">
+          <div>
+            <div class="page-header__title">
+              数据筛选与生成
+              <el-tag v-if="applyId" type="warning" size="small" style="margin-left:8px">申请ID: {{ applyId }}</el-tag>
+            </div>
+            <div class="page-header__desc">设置筛选条件，生成数据并推送给指定用户的工作空间</div>
+          </div>
         </div>
       </template>
 
@@ -20,7 +25,7 @@
           </el-col>
           <el-col :span="8">
             <el-form-item label="文件名">
-              <el-input v-model="filename" placeholder="留空则自动命名" />
+              <el-input v-model="filename" placeholder="留空则自动命名 testData_时间戳.xlsx" />
             </el-form-item>
           </el-col>
         </el-row>
@@ -31,19 +36,25 @@
         <SmartFilter ref="filterRef" :columns="columns" @change="onFilterChange" />
       </div>
 
-      <div style="margin-top: 16px; display: flex; gap: 12px">
-        <el-button type="primary" :loading="generating" @click="generate">
+      <div class="action-bar">
+        <el-button type="primary" size="large" :loading="generating" @click="generate">
           <el-icon><Check /></el-icon>&nbsp;确认生成并推送给用户
         </el-button>
-        <el-button @click="resetFilters">重置筛选</el-button>
+        <el-button size="large" @click="resetFilters">重置筛选</el-button>
       </div>
 
       <el-alert v-if="lastResult" :title="`已生成：${lastResult.filename}（${lastResult.rows} 行）`" type="success" :closable="false" style="margin-top: 16px" />
     </el-card>
 
     <!-- 错误日志 -->
-    <el-card style="margin-top: 16px" v-if="errorLog.length">
-      <template #header>生成失败日志</template>
+    <el-card shadow="never" class="card" style="margin-top: 16px" v-if="errorLog.length">
+      <template #header>
+        <div class="page-header" style="margin:0">
+          <div>
+            <div class="page-header__title" style="font-size:16px">生成失败日志</div>
+          </div>
+        </div>
+      </template>
       <el-table :data="errorLog" size="small">
         <el-table-column prop="time" label="时间" width="170" />
         <el-table-column prop="message" label="错误信息" />
@@ -143,3 +154,13 @@ function retry(row: { message: string }) {
   generate()
 }
 </script>
+
+<style scoped>
+.action-bar {
+  margin-top: 20px;
+  display: flex;
+  gap: 12px;
+  padding-top: 16px;
+  border-top: 1px solid var(--divider);
+}
+</style>

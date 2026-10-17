@@ -1,0 +1,1 @@
+import{J as t}from"./index-2a252c8c.js";function n(){return t.post("/data/fetch")}function r(){return t.get("/data/columns")}function o(e){return t.post("/data/generate",e)}export{o as a,n as f,r as g};

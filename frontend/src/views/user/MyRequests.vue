@@ -1,19 +1,29 @@
 <template>
-  <el-card>
-    <template #header>我的申请记录</template>
+  <el-card shadow="never" class="card">
+    <template #header>
+      <div class="page-header" style="margin:0">
+        <div>
+          <div class="page-header__title">我的申请记录</div>
+          <div class="page-header__desc">查看数据申请的处理进度与结果</div>
+        </div>
+      </div>
+    </template>
     <el-table :data="list" v-loading="loading" stripe style="width: 100%">
       <el-table-column prop="id" label="申请ID" width="80" />
       <el-table-column prop="data_name" label="数据名称" />
-      <el-table-column label="状态" width="100">
+      <el-table-column label="状态" width="120">
         <template #default="{ row }">
-          <el-tag :type="statusType(row.status)" size="small">{{ statusText(row.status) }}</el-tag>
+          <span class="status-cell">
+            <span class="status-dot" :class="`status-dot--${statusDot(row.status)}`"></span>
+            <span class="tag" :class="statusTag(row.status)">{{ statusText(row.status) }}</span>
+          </span>
         </template>
       </el-table-column>
       <el-table-column prop="apply_time" label="申请时间" width="170" />
       <el-table-column prop="finish_time" label="完成时间" width="170">
         <template #default="{ row }">{{ row.finish_time || '-' }}</template>
       </el-table-column>
-      <el-table-column label="操作" width="160">
+      <el-table-column label="操作" width="160" fixed="right">
         <template #default="{ row }">
           <el-button v-if="row.status === 'completed'" type="primary" link @click="viewResult(row)">查看结果</el-button>
           <el-tooltip v-if="row.status === 'rejected'" :content="row.reject_reason || '已驳回'">
@@ -46,8 +56,11 @@ onMounted(async () => {
   }
 })
 
-function statusType(s: string) {
-  return ({ pending: 'info', processing: 'warning', completed: 'success', rejected: 'danger' } as Record<string, string>)[s] || 'info'
+function statusTag(s: string) {
+  return ({ pending: 'tag-pending', processing: 'tag-running', completed: 'tag-done', rejected: 'tag-reject' } as Record<string, string>)[s] || 'tag-pending'
+}
+function statusDot(s: string) {
+  return ({ pending: 'pending', processing: 'running', completed: 'done', rejected: 'reject' } as Record<string, string>)[s] || 'pending'
 }
 function statusText(s: string) {
   return ({ pending: '待审核', processing: '处理中', completed: '已完成', rejected: '已驳回' } as Record<string, string>)[s] || s
@@ -56,3 +69,14 @@ function viewResult(row: DataApply) {
   router.push('/user/my-results')
 }
 </script>
+
+<style scoped>
+.status-cell { display: inline-flex; align-items: center; gap: 4px; }
+.tag {
+  display: inline-block;
+  padding: 2px 10px;
+  border-radius: var(--radius-full);
+  font-size: var(--fs-xs);
+  line-height: 18px;
+}
+</style>

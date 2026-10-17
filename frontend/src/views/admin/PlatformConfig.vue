@@ -1,6 +1,13 @@
 <template>
-  <el-card>
-    <template #header>连接数据分析PC</template>
+  <el-card shadow="never" class="card">
+    <template #header>
+      <div class="page-header" style="margin:0">
+        <div>
+          <div class="page-header__title">连接数据分析 PC</div>
+          <div class="page-header__desc">配置 Windows 数据分析主机的连接信息与数据投递目录</div>
+        </div>
+      </div>
+    </template>
 
     <!-- 连接状态：已连接 / 连接中 / 连接失败 -->
     <el-alert
@@ -14,6 +21,7 @@
     />
 
     <el-form ref="formRef" :model="form" :rules="rules" label-width="120px" style="max-width: 640px">
+      <div class="section-title">连接信息</div>
       <el-form-item label="PC地址" prop="host">
         <el-input v-model="form.host" placeholder="如 8.133.223.251" />
       </el-form-item>
@@ -26,6 +34,8 @@
       <el-form-item label="密码" prop="password">
         <el-input v-model="form.password" type="password" show-password placeholder="登录密码" />
       </el-form-item>
+
+      <div class="section-title">数据投递目录</div>
       <el-form-item label="工作目录" prop="workspace_dir">
         <el-input v-model="form.workspace_dir" placeholder="C:\workspace（各用户私有目录的父目录）" />
         <div class="field-tip">按申请生成数据时，将写入该目录下以用户名命名的子目录（对应用户 W: 盘）</div>
@@ -33,6 +43,7 @@
       <el-form-item label="输出目录" prop="output_path">
         <el-input v-model="form.output_path" placeholder="C:\StatsData（公共数据目录，对应用户 Z: 盘）" />
       </el-form-item>
+
       <el-form-item>
         <el-button type="primary" :loading="testing" @click="test">测试连接</el-button>
         <el-button type="success" @click="save">保存配置</el-button>
@@ -121,5 +132,19 @@ function save() {
 </script>
 
 <style scoped>
-.field-tip { font-size: 12px; color: #909399; line-height: 1.4; margin-top: 2px; }
+.field-tip {
+  font-size: 12px;
+  color: var(--text-secondary);
+  line-height: 1.5;
+  margin-top: 4px;
+}
+.section-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-title);
+  margin: 8px 0 16px;
+  padding-left: 8px;
+  border-left: 3px solid var(--color-primary);
+  line-height: 1;
+}
 </style>

@@ -1,22 +1,36 @@
 <template>
   <div class="smart-filter">
-    <!-- 条件过多时提供关键词定位 -->
-    <div v-if="columns.length > VISIBLE_LIMIT" class="filter-toolbar">
-      <el-input
-        v-model="keyword"
-        placeholder="搜索筛选条件名称，快速定位"
-        clearable
-        :prefix-icon="Search"
-        style="width: 260px"
-      />
-      <span class="toolbar-tip">共 {{ columns.length }} 个条件，默认展示前 {{ VISIBLE_LIMIT }} 个</span>
+    <!-- 工具栏：搜索 + 已选计数 + 清空 -->
+    <div class="filter-toolbar">
+      <div class="toolbar-left">
+        <el-input
+          v-model="keyword"
+          placeholder="搜索筛选条件名称，快速定位"
+          clearable
+          :prefix-icon="Search"
+          style="width: 260px"
+        />
+        <span class="toolbar-tip">共 {{ columns.length }} 个条件，默认展示前 {{ VISIBLE_LIMIT }} 个</span>
+      </div>
+      <div class="toolbar-right">
+        <el-badge :value="selectedCount" class="selected-badge">
+          <span class="selected-text">已选条件</span>
+        </el-badge>
+        <el-button link type="primary" size="small" :disabled="!selectedCount" @click="resetAll">清空</el-button>
+      </div>
     </div>
 
     <el-form :model="model" label-width="140px" size="default">
       <!-- 默认展示：前 20 个（或搜索命中）条件 -->
       <el-row :gutter="16">
         <el-col v-for="col in visibleColumns" :key="col.name" :span="8">
-          <el-form-item :label="col.name">
+          <el-form-item>
+            <template #label>
+              <span class="field-label">
+                <span class="field-name">{{ col.name }}</span>
+                <span class="field-type" :class="`field-type--${col.control}`">{{ typeLabel(col.control) }}</span>
+              </span>
+            </template>
             <!-- 枚举字段 -> Select 下拉框（可搜索、可多选） -->
             <el-select
               v-if="col.control === 'select'"
@@ -49,7 +63,7 @@
                 style="width: 50%"
                 @change="onRangeChange(col.name)"
               />
-              <span class="range-sep">-</span>
+              <span class="range-sep">—</span>
               <el-input-number
                 v-model="rangeMax[col.name]"
                 :min="col.min"
@@ -90,7 +104,13 @@
         <el-collapse-item :title="`更多筛选条件（${moreColumns.length}）`" name="more">
           <el-row :gutter="16">
             <el-col v-for="col in moreColumns" :key="col.name" :span="8">
-              <el-form-item :label="col.name">
+              <el-form-item>
+                <template #label>
+                  <span class="field-label">
+                    <span class="field-name">{{ col.name }}</span>
+                    <span class="field-type" :class="`field-type--${col.control}`">{{ typeLabel(col.control) }}</span>
+                  </span>
+                </template>
                 <el-select
                   v-if="col.control === 'select'"
                   v-model="model[col.name]"
@@ -116,7 +136,7 @@
                     style="width: 50%"
                     @change="onRangeChange(col.name)"
                   />
-                  <span class="range-sep">-</span>
+                  <span class="range-sep">—</span>
                   <el-input-number
                     v-model="rangeMax[col.name]"
                     :min="col.min"
@@ -198,6 +218,30 @@ watch([keyword, matchedColumns], () => {
   expanded.value = visibleColumns.value.length < matchedColumns.value.length ? ['more'] : []
 })
 
+// 字段类型标签
+function typeLabel(control: string): string {
+  return ({ select: '枚举', range: '数值', daterange: '日期' } as Record<string, string>)[control] || '文本'
+}
+
+// 已选条件数（排除空值）
+const selectedCount = computed(() =>
+  Object.values(model).filter((v) => {
+    if (v === undefined || v === null || v === '') return false
+    if (Array.isArray(v) && v.length === 0) return false
+    return true
+  }).length,
+)
+
+function resetAll() {
+  Object.keys(model).forEach((k) => delete model[k])
+  Object.keys(rangeMin).forEach((k) => (rangeMin[k] = undefined))
+  Object.keys(rangeMax).forEach((k) => (rangeMax[k] = undefined))
+  Object.keys(dateRange).forEach((k) => (dateRange[k] = null))
+  keyword.value = ''
+  expanded.value = []
+  emitChange()
+}
+
 function onRangeChange(name: string) {
   const lo = rangeMin[name]
   const hi = rangeMax[name]
@@ -236,23 +280,60 @@ watch(model, emitChange, { deep: true })
 // 暴露给父组件：取筛选条件 / 重置
 defineExpose({
   getFilters: () => model,
-  reset() {
-    Object.keys(model).forEach((k) => delete model[k])
-    Object.keys(rangeMin).forEach((k) => (rangeMin[k] = undefined))
-    Object.keys(rangeMax).forEach((k) => (rangeMax[k] = undefined))
-    Object.keys(dateRange).forEach((k) => (dateRange[k] = null))
-    keyword.value = ''
-    expanded.value = []
-    emitChange()
-  },
+  reset: resetAll,
 })
 </script>
 
 <style scoped>
-.smart-filter { background: #fff; padding: 16px; border-radius: 4px; }
-.filter-toolbar { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; }
-.toolbar-tip { font-size: 12px; color: #909399; }
-.range-box { display: flex; align-items: center; width: 100%; }
-.range-sep { margin: 0 6px; color: #909399; }
-.more-collapse { border-top: 1px dashed #e4e7ed; border-bottom: none; }
+.smart-filter {
+  background: var(--bg-surface);
+  padding: 20px;
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--border-light);
+}
+.filter-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 16px;
+  padding-bottom: 16px;
+  border-bottom: 1px dashed var(--border-light);
+  flex-wrap: wrap;
+  gap: 12px;
+}
+.toolbar-left { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.toolbar-right { display: flex; align-items: center; gap: 12px; }
+.toolbar-tip { font-size: 12px; color: var(--text-secondary); }
+.selected-badge { margin-right: 4px; }
+.selected-text { font-size: 13px; color: var(--text-regular); }
+
+.field-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.field-name { color: var(--text-regular); }
+.field-type {
+  font-size: 10px;
+  padding: 1px 6px;
+  border-radius: 4px;
+  line-height: 16px;
+  background: var(--bg-hover);
+  color: var(--text-secondary);
+}
+.field-type--select { background: rgba(47, 99, 255, 0.1); color: var(--color-primary); }
+.field-type--range { background: rgba(16, 185, 129, 0.1); color: var(--status-done); }
+.field-type--daterange { background: rgba(245, 158, 11, 0.1); color: var(--status-pending); }
+
+.range-box {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  background: var(--bg-hover);
+  padding: 4px 8px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border-light);
+}
+.range-sep { margin: 0 6px; color: var(--text-placeholder); }
+.more-collapse { border-top: 1px dashed var(--border-light); border-bottom: none; margin-top: 8px; }
 </style>

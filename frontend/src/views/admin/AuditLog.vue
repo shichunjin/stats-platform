@@ -1,9 +1,12 @@
 <template>
-  <el-card>
+  <el-card shadow="never" class="card">
     <template #header>
-      <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;">
-        <span>审计日志</span>
-        <div style="display:flex;gap:8px;flex-wrap:wrap;">
+      <div class="page-header" style="margin:0">
+        <div>
+          <div class="page-header__title">审计日志</div>
+          <div class="page-header__desc">平台所有关键操作的可追溯记录</div>
+        </div>
+        <div class="filter-bar">
           <el-select v-model="moduleFilter" placeholder="按模块筛选" clearable style="width: 150px">
             <el-option v-for="m in moduleOptions" :key="m.value" :label="m.label" :value="m.value" />
           </el-select>
@@ -26,21 +29,26 @@
       <el-table-column prop="created_at" label="操作时间" width="170" sortable="custom" />
       <el-table-column prop="user_id" label="操作人(ID)" width="100" />
       <el-table-column label="操作模块" width="130">
-        <template #default="{ row }">{{ moduleOf(row.action) }}</template>
+        <template #default="{ row }">
+          <span class="tag tag-expired">{{ moduleOf(row.action) }}</span>
+        </template>
       </el-table-column>
       <el-table-column prop="action" label="操作类型" width="170" />
       <el-table-column prop="detail" label="操作内容" show-overflow-tooltip />
       <el-table-column prop="ip_addr" label="IP" width="130" />
-      <el-table-column label="结果状态" width="90">
+      <el-table-column label="结果" width="90">
         <template #default="{ row }">
-          <el-tag :type="row.status === 'failed' ? 'danger' : 'success'" size="small">
-            {{ row.status === 'failed' ? '失败' : '成功' }}
-          </el-tag>
+          <span class="status-cell">
+            <span class="status-dot" :class="row.status === 'failed' ? 'status-dot--reject' : 'status-dot--done'"></span>
+            <span class="tag" :class="row.status === 'failed' ? 'tag-reject' : 'tag-done'">
+              {{ row.status === 'failed' ? '失败' : '成功' }}
+            </span>
+          </span>
         </template>
       </el-table-column>
     </el-table>
 
-    <div style="margin-top: 12px; display: flex; justify-content: flex-end;">
+    <div class="pagination-wrap">
       <el-pagination
         v-model:current-page="page"
         :page-size="pageSize"
@@ -126,3 +134,19 @@ onMounted(async () => {
   }
 })
 </script>
+
+<style scoped>
+.page-header { align-items: center; margin-bottom: 0; }
+.filter-bar { display: flex; gap: 8px; flex-wrap: wrap; }
+.status-cell { display: inline-flex; align-items: center; gap: 4px; }
+.pagination-wrap { margin-top: 16px; display: flex; justify-content: flex-end; }
+.tag {
+  display: inline-block;
+  padding: 2px 10px;
+  border-radius: var(--radius-full);
+  font-size: var(--fs-xs);
+  line-height: 18px;
+  background: var(--color-primary-bg);
+  color: var(--color-primary);
+}
+</style>
