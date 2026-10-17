@@ -33,6 +33,10 @@ from app.config import settings
 settings.database_url = "sqlite:///:memory:"
 settings.jwt_secret = "test-secret-key-for-unit-tests"
 settings.fileserver_root = os.environ["FILESERVER_ROOT"]
+# 固定原始数据基线为不存在的路径：相似度规则下"无基线"安全默认转人工审核，
+# 使既有用例的审批流程断言保持确定性（相似度专项用例自行 monkeypatch）
+settings.dataset_csv_path = os.path.join(
+    os.environ["FILESERVER_ROOT"], "__missing_baseline__.csv")
 
 from app.database import Base, get_db
 from app.models import User, Scope, AuditLog

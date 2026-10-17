@@ -73,10 +73,12 @@ def remote_sftp(monkeypatch):
 
 # ---- 编排函数 pull_user_pending ----
 
-def test_pull_uses_username_dir_and_type_whitelist(test_user, remote_sftp, tmp_path):
+def test_pull_uses_username_dir_and_allows_all_types(test_user, remote_sftp, tmp_path):
     sftp = remote_sftp({
         "model.out": b"regression output",
-        "result.xlsx": b"not allowed type",
+        "result.xlsx": b"excel binary blob",
+        "chart.png": b"png bytes",
+        "report.pdf": b"pdf bytes",
         "subdir": None,
     })
     local_dir = str(tmp_path / "pending")
@@ -85,11 +87,11 @@ def test_pull_uses_username_dir_and_type_whitelist(test_user, remote_sftp, tmp_p
 
     # 远端目录必须按用户名（与投递侧、login.ps1 的 RESULTS_DIR 约定一致）
     assert sftp.listed == [f"{settings.windows_pending_dir}/user1"]
-    # 只有白名单类型被拉回：.out 进、.xlsx 与子目录不进
-    assert pulled == [os.path.join(local_dir, "model.out")]
-    assert os.path.isfile(os.path.join(local_dir, "model.out"))
-    assert not os.path.exists(os.path.join(local_dir, "result.xlsx"))
-    assert all(name.endswith("model.out") for name, _ in sftp.gets)
+    # 所有文件类型都允许回拉（是否放行由后续相似度审核决定），子目录不拉
+    got = {os.path.basename(p) for p in pulled}
+    assert got == {"model.out", "result.xlsx", "chart.png", "report.pdf"}
+    assert not os.path.exists(os.path.join(local_dir, "subdir"))
+    assert {name.rsplit("/", 1)[-1] for name, _ in sftp.gets} == got
 
 
 def test_pull_skips_unchanged_and_refetches_changed(test_user, remote_sftp, tmp_path):

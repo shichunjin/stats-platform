@@ -30,6 +30,12 @@ class Settings(BaseSettings):
     # 业务数据宽表名（create_testdata_table.py 建的表，/data/fetch 从该表读数据）
     testdata_table: str = "test_data"
 
+    # 导出免审阈值：待导出文件与原始数据集相似度 ≥ 该值（0~1）时必须管理员人工审核，
+    # 低于该值系统自动放行；0.6 = 60%
+    export_review_similarity_threshold: float = 0.6
+    # 免审自动通过的结果，下载有效期（天），与人工审核通过一致
+    export_publish_valid_days: int = 30
+
     # ---- Windows 云主机 SFTP 推送（生成的 Excel 推送到 Windows C:\StatsData） ----
     sftp_host: str = "8.133.223.251"
     sftp_port: int = 22

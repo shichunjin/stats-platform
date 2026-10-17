@@ -2,12 +2,21 @@
 
 普通用户不能直接导出 Windows 平台内的数据，只能把分析结果保存到 Windows 的
 待导出目录（C:\\pending\\{用户名}，RDP 中为 RESULTS_DIR），再在平台上
-「申请导出结果」。后端经 SFTP 把这些文件回拉到服务器暂存、登记审核；
-管理员人工审核通过后结果才出现在「已发布」列表供下载。
+「申请导出结果」。后端经 SFTP 把这些文件回拉到服务器暂存，并与原始数据集
+（testData.csv）做相似度比对：
+
+- 相似度 ≥ 阈值（默认 60%，可由 EXPORT_REVIEW_SIMILARITY_THRESHOLD 配置）：
+  判定疑似原始数据，登记为待审核，管理员人工 approve / reject；
+- 相似度低于阈值：免审核，系统自动发布，用户立即可下载；
+- 图片/PDF/二进制等无法提取文本的文件：免审核自动发布；
+- 原始数据基线缺失无法判定时：安全默认转人工审核。
+
+所有文件类型都允许申请导出，不再做扩展名白名单拦截。
 """
 import os
 import re
 import shutil
+from datetime import datetime, timedelta
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
@@ -15,7 +24,7 @@ from app.database import get_db
 from app.models import User, PendingFile, ExportResult, AuditLog
 from app.auth import get_current_user
 from app.config import settings
-from app.review import scan_pending_directory, ALLOWED_EXTENSIONS
+from app.review import scan_pending_directory, decide_export_review
 from app.schemas import PendingFileOut, ExportResultOut
 from app.transfer import list_remote_files, download_file_from_windows
 
@@ -36,11 +45,11 @@ def _published_dir(result_id: int) -> str:
 
 
 def pull_user_pending(user: User, local_dir: str) -> list[str]:
-    """把 Windows 上 C:\\pending\\{用户名} 的白名单结果文件增量回拉到本地。
+    """把 Windows 上 C:\\pending\\{用户名} 的结果文件增量回拉到本地。
 
-    - 只拉审查白名单类型（.csv/.png/.jpg/.out/.txt/.log/.pdf）
-    - 同名且大小一致视为未变化，跳过重复下载
-    - 返回本次新拉回的本地文件路径列表
+    - 所有文件类型都允许（是否放行由后续相似度审核决定）；
+    - 同名且大小一致视为未变化，跳过重复下载；
+    - 返回本次新拉回的本地文件路径列表。
     """
     remote_dir = f"{settings.windows_pending_dir}/{user.username}"
     os.makedirs(local_dir, exist_ok=True)
@@ -49,14 +58,34 @@ def pull_user_pending(user: User, local_dir: str) -> list[str]:
     for name, size in list_remote_files(remote_dir):
         if not _SAFE_REMOTE_NAME_RE.match(name) or name in (".", ".."):
             continue
-        if os.path.splitext(name)[1].lower() not in ALLOWED_EXTENSIONS:
-            continue
         local_path = os.path.join(local_dir, name)
         if os.path.exists(local_path) and os.path.getsize(local_path) == size:
             continue
         download_file_from_windows(remote_dir, name, local_path)
         pulled.append(local_path)
     return pulled
+
+
+def _auto_publish(db: Session, pf: PendingFile, reason: str) -> ExportResult:
+    """免审自动发布：复制到 published 目录并创建可下载记录（30 天有效）。"""
+    pub_dir = _published_dir(pf.id)
+    pub_path = os.path.join(pub_dir, pf.file_name)
+    shutil.copy2(pf.file_path, pub_path)
+
+    exp = ExportResult(
+        user_id=pf.user_id,
+        pending_file_id=pf.id,
+        result_name=pf.file_name,
+        file_path=pub_path,
+        file_size=pf.file_size,
+        expires_at=datetime.utcnow() + timedelta(days=settings.export_publish_valid_days),
+    )
+    db.add(exp)
+    pf.status = "approved"
+    pf.review_reason = reason
+    pf.reviewed_at = datetime.utcnow()
+    db.flush()  # 取得 exp.id，供调用方返回 result_id
+    return exp
 
 
 @router.get("/mine", summary="获取我的结果列表", description="""
@@ -90,9 +119,16 @@ def get_my_results(
 **申请导出结果（普通用户）**
 
 先经 SFTP 从 Windows 云平台的 `C:\\pending\\{用户名}` 待导出目录增量回拉
-结果文件（限审查白名单类型），再扫描本地暂存目录，把新文件登记为
-「待审核」的导出申请。**不会自动审查**，需管理员在 `/admin/pending` 中
-人工审核。审核通过后，结果会复制到 published 目录并出现在「已发布」列表。
+结果文件（**所有类型均可**），再扫描本地暂存目录逐个与原始数据集
+（testData.csv）做相似度比对：
+
+- 相似度 **≥ 60%**（`EXPORT_REVIEW_SIMILARITY_THRESHOLD` 可调）：登记为
+  「待审核」，管理员在 `/admin/pending` 中人工 approve / reject；
+- 相似度 **< 60%** 或图片/PDF/二进制等无法提取文本的文件：**免审核自动发布**，
+  立即可在「已发布」列表下载（30 天有效）；
+- 原始数据基线缺失无法判定时安全默认转人工审核。
+
+返回 `registered`（需人工审核数）与 `auto_approved`（免审自动通过数）。
 
 **错误码**
 - `401`：未认证
@@ -117,7 +153,8 @@ def request_export(
 
     files = scan_pending_directory(pending_dir)
 
-    registered = []
+    need_review: list[dict] = []
+    auto_approved: list[dict] = []
     for fpath in files:
         fname = os.path.basename(fpath)
         existing = db.query(PendingFile).filter(
@@ -137,23 +174,48 @@ def request_export(
             status="pending",
         )
         db.add(pf)
-        db.flush()
-        registered.append({
-            "id": pf.id,
-            "file_name": fname,
-            "status": "pending",
-        })
+        db.flush()  # 取得 pf.id，供发布目录命名与 pending_file_id 关联
 
-    if registered:
+        decision, reason, _score = decide_export_review(fpath)
+        if decision == "auto":
+            exp = _auto_publish(db, pf, reason)
+            db.add(AuditLog(
+                user_id=user.id,
+                action="export_auto_approved",
+                detail=f"免审核自动通过导出 {fname} (id={pf.id})：{reason}",
+            ))
+            auto_approved.append({
+                "id": pf.id,
+                "file_name": fname,
+                "status": "approved",
+                "result_id": exp.id,
+                "reason": reason,
+            })
+        else:
+            pf.review_reason = reason
+            need_review.append({
+                "id": pf.id,
+                "file_name": fname,
+                "status": "pending",
+                "reason": reason,
+            })
+
+    if need_review:
         db.add(AuditLog(
             user_id=user.id,
             action="export_requested",
-            detail=f"申请导出 {len(registered)} 个文件: {', '.join(r['file_name'] for r in registered)}",
+            detail=(f"申请导出 {len(need_review)} 个高相似度文件，等待管理员审核: "
+                    f"{', '.join(r['file_name'] for r in need_review)}"),
         ))
 
     db.commit()
 
-    return {"registered": len(registered), "files": registered}
+    return {
+        "registered": len(need_review),
+        "files": need_review,
+        "auto_approved": len(auto_approved),
+        "auto_files": auto_approved,
+    }
 
 
 @router.post("/{result_id}/download", summary="下载已发布结果", description="""

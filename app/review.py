@@ -196,3 +196,201 @@ def scan_pending_directory(pending_dir: str) -> list:
         if entry.is_file():
             result.append(entry.path)
     return result
+
+
+# ============================================================
+# 与原始数据集的相似度比对（免审 / 转人工审核的依据）
+# ============================================================
+#
+# 规则（2026-10 起）：
+#   - 所有文件类型都允许申请导出，不再做扩展名白名单拦截；
+#   - 可提取文本的文件（csv/txt/out/log/tsv/dat/xlsx 等）与原始数据集
+#     testData 计算相似度：≥ EXPORT_REVIEW_SIMILARITY_THRESHOLD（默认 60%）
+#     判定为疑似原始数据，转管理员人工审核；低于阈值免审自动发布；
+#   - 无法提取文本的文件（图片、PDF、二进制等）不参与比对，免审自动发布；
+#   - 原始数据基线文件缺失时无法判定，安全默认转人工审核。
+
+from collections import Counter
+
+from app.config import settings as _settings
+
+# 可直接按文本读取的扩展名
+_TEXT_EXTS = {".csv", ".txt", ".out", ".log", ".tsv", ".dat", ".tab", ".json", ".xml"}
+# 参与比对时读取的最大规模（防止异常大文件拖垮服务）
+_MAX_BASELINE_LINES = 20000
+_MAX_CANDIDATE_CHARS = 2 * 1024 * 1024
+_MAX_XLSX_ROWS = 20000
+
+# 基线缓存：{abspath: (mtime_ns, size, line_set, token_counter, header)}
+_baseline_cache: dict = {}
+
+_ws_re = re.compile(r"\s+")
+_token_re = re.compile(r"[0-9A-Za-z_.]+")
+
+
+def _normalize_line(line: str) -> str:
+    return _ws_re.sub(" ", line.strip())
+
+
+def _decode_bytes(raw: bytes) -> str:
+    """兼容 UTF-8/GBK 的整体解码（testData.csv 生产为 GBK）。"""
+    for enc in ("utf-8-sig", "gbk", "latin-1"):
+        try:
+            return raw.decode(enc)
+        except UnicodeDecodeError:
+            continue
+    return raw.decode("latin-1", errors="replace")
+
+
+def _read_text_file(path: str, max_bytes: int | None = None) -> str:
+    with open(path, "rb") as f:
+        raw = f.read() if max_bytes is None else f.read(max_bytes)
+    return _decode_bytes(raw)
+
+
+def _load_baseline(baseline_path: str):
+    """加载原始数据集基线：行集合 + token 多重集 + 表头行。按 mtime 缓存。"""
+    try:
+        st = os.stat(baseline_path)
+    except OSError:
+        return None
+
+    key = os.path.abspath(baseline_path)
+    cached = _baseline_cache.get(key)
+    if cached and cached[0] == st.st_mtime_ns and cached[1] == st.st_size:
+        return cached[2:]
+
+    line_set: set[str] = set()
+    tokens: Counter = Counter()
+    header = ""
+    n = 0
+    for raw in _read_text_file(baseline_path).splitlines():
+        norm = _normalize_line(raw)
+        if not norm:
+            continue
+        if n == 0:
+            header = norm
+        line_set.add(norm)
+        tokens.update(_token_re.findall(norm.lower()))
+        n += 1
+        if n >= _MAX_BASELINE_LINES:
+            break
+
+    result = (line_set, tokens, header)
+    _baseline_cache[key] = (st.st_mtime_ns, st.st_size) + result
+    return result
+
+
+def _extract_xlsx_text(path: str) -> str:
+    """把 xlsx 各工作表的单元格按行拼成 CSV 样式文本。"""
+    try:
+        from openpyxl import load_workbook
+    except ImportError:
+        return ""
+    try:
+        wb = load_workbook(path, read_only=True, data_only=True)
+    except Exception:
+        return ""
+    parts: list[str] = []
+    try:
+        for ws in wb.worksheets:
+            row_n = 0
+            for row in ws.iter_rows(values_only=True):
+                parts.append(",".join("" if c is None else str(c) for c in row))
+                row_n += 1
+                if row_n >= _MAX_XLSX_ROWS:
+                    break
+    finally:
+        wb.close()
+    return "\n".join(parts)
+
+
+def extract_comparable_text(file_path: str) -> str | None:
+    """提取待导出文件中可用于比对的文本。
+
+    返回 None 表示该类型无法提取文本（图片/PDF/二进制），不参与相似度比对。
+    """
+    ext = os.path.splitext(file_path)[1].lower()
+    if ext in _TEXT_EXTS:
+        try:
+            with open(file_path, "rb") as f:
+                raw = f.read(_MAX_CANDIDATE_CHARS)
+        except OSError:
+            return ""
+        for enc in ("utf-8-sig", "gbk", "latin-1"):
+            try:
+                return raw.decode(enc)
+            except UnicodeDecodeError:
+                continue
+        return raw.decode("latin-1", errors="replace")
+    if ext == ".xlsx":
+        return _extract_xlsx_text(file_path)
+    return None
+
+
+def similarity_to_dataset(file_path: str, baseline_path: str | None = None
+                          ) -> tuple[float | None, str]:
+    """计算待导出文件与原始数据集的相似度（0~1）。
+
+    取两个指标的较大值：
+      1. 行命中率：候选文件中有多少行在原始数据集里逐行出现（复制/切片原始数据时高）；
+      2. token 覆盖率：候选内容的 token 有多少比例能在原始数据集中找到
+         （换分隔符/去掉引号等格式变化时仍然敏感）。
+    表头行（与基线表头完全相同）不计入命中，避免小文件被一个表头推高相似度。
+
+    返回 (score, reason)。score=None 表示无法判定：
+      - 基线文件缺失（调用方应安全默认转人工审核）；
+      - 文件类型无法提取文本（调用方按免审处理；即使基线缺失也免审，
+        图片/PDF/二进制不可能逐行夹带原始表格）。
+    """
+    text = extract_comparable_text(file_path)
+    if text is None:
+        return None, "非文本类文件，不参与相似度比对"
+
+    base = _load_baseline(baseline_path or _settings.dataset_csv_path)
+    if base is None:
+        return None, "原始数据基线文件不可用，转人工审核"
+
+    line_set, base_tokens, header = base
+    cand_lines = [ln for ln in (_normalize_line(x) for x in text.splitlines()) if ln]
+    if not cand_lines:
+        return 0.0, "文件内容为空"
+
+    data_lines = [ln for ln in cand_lines if ln != header]
+    if data_lines:
+        hits = sum(1 for ln in data_lines if ln in line_set)
+        line_ratio = hits / len(data_lines)
+    else:
+        line_ratio = 0.0
+
+    cand_counter: Counter = Counter()
+    for ln in data_lines:
+        cand_counter.update(_token_re.findall(ln.lower()))
+    total = sum(cand_counter.values())
+    if total:
+        overlap = sum((cand_counter & base_tokens).values())
+        token_ratio = overlap / total
+    else:
+        token_ratio = 0.0
+
+    score = round(max(line_ratio, token_ratio), 4)
+    return score, (f"行命中率 {line_ratio * 100:.0f}%，token 覆盖率 {token_ratio * 100:.0f}%，"
+                   f"相似度 {score * 100:.0f}%")
+
+
+def decide_export_review(file_path: str, threshold: float | None = None
+                         ) -> tuple[str, str, float | None]:
+    """返回 (decision, reason, score)；decision ∈ {review, auto}。
+
+    - review：相似度达到阈值，或原始基线缺失无法判定（安全默认）；
+    - auto：相似度低于阈值，或文件不可提取文本（图片/PDF/二进制）。
+    """
+    thr = _settings.export_review_similarity_threshold if threshold is None else threshold
+    score, detail = similarity_to_dataset(file_path)
+    if score is None:
+        if "基线" in detail:
+            return "review", detail, None
+        return "auto", detail, None
+    if score >= thr:
+        return "review", f"{detail}，达到/超过阈值 {thr * 100:.0f}%，需管理员审核", score
+    return "auto", f"{detail}，低于阈值 {thr * 100:.0f}%，免审核自动通过", score

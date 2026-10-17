@@ -84,12 +84,18 @@ async function load() {
 async function onExport() {
   try {
     const res = await requestExport()
-    if (res.registered === 0) {
+    const total = res.registered + res.auto_approved
+    if (total === 0) {
       ElMessage.warning('没有新的结果文件可申请（请先在 Windows 平台保存结果到待导出目录）')
-    } else {
-      ElMessage.success(`已提交 ${res.registered} 个导出申请，等待管理员审核`)
-      load()
+      return
     }
+    if (res.auto_approved > 0) {
+      ElMessage.success(`${res.auto_approved} 个文件与原始数据相似度低于 60%，已免审核发布，可直接下载`)
+    }
+    if (res.registered > 0) {
+      ElMessage.warning(`${res.registered} 个文件与原始数据相似度达到 60% 以上，需管理员审核后才能下载`)
+    }
+    load()
   } catch {
     /* 拦截器处理 */
   }
