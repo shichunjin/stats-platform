@@ -194,9 +194,24 @@ Restart-Service -Name TermService -Force
 #      （新装/升级任何统计软件后重跑一次即可，幂等）
 .\powershell\enforce-output-location.ps1
 
-# ④ 部署登录脚本到文件服务器
-Copy-Item .\powershell\login.ps1 \\fileserver\scripts\login.ps1
+# ④ 部署登录脚本（单机一体部署：放本机固定目录 + 公共启动项）
+$scriptsDir = "C:\stats-scripts"
+New-Item -ItemType Directory -Path $scriptsDir -Force | Out-Null
+Copy-Item .\powershell\login.ps1 "$scriptsDir\login.ps1" -Force
+# 普通用户只读、不可篡改脚本；SYSTEM/Administrators 完全控制
+icacls $scriptsDir /inheritance:r /grant "*S-1-5-32-545:(OI)(CI)(RX)" "*S-1-5-18:(OI)(CI)F" "*S-1-5-32-544:(OI)(CI)F" | Out-Null
+# 所有用户登录时以本人身份执行（与 map-z/map-w-drive.cmd 同一启动目录）
+$startup = "C:\ProgramData\Microsoft\Windows\Start Menu\Programs\StartUp"
+$wrapper = Join-Path $startup "run-login.cmd"
+"@echo off`r`npowershell -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$scriptsDir\login.ps1`"" |
+    Set-Content $wrapper -Encoding ASCII
+
+# 多机部署（独立文件服务器）时，才改用共享路径：
+# Copy-Item .\powershell\login.ps1 \\fileserver\scripts\login.ps1
 ```
+
+> 登录脚本更新流程（本次 login.ps1 修改后必做）：在仓库目录 `git pull` 后重新执行上面第 ④ 步的
+> `Copy-Item ... C:\stats-scripts\login.ps1`，已登录用户**注销重新登录**一次生效。
 
 **生成物落点强制（保证各软件生成文件都在本人指定目录）：**
 
