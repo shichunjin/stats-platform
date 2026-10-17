@@ -136,9 +136,9 @@ if (-not $IsAdmin -and (Test-Path $WDrive)) {
     # 3.5 标准文件对话框左侧栏：我的工作区 / 本人待导出目录 / 原始数据
     $placesKey = "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\ComDlg32\PlacesBar"
     New-Item -Path $placesKey -Force | Out-Null
-    New-Item -Property -Path $placesKey -Name "Place0" -Value "W:\"         -PropertyType String -Force | Out-Null
-    New-Item -Property -Path $placesKey -Name "Place1" -Value $UserPending  -PropertyType String -Force | Out-Null
-    New-Item -Property -Path $placesKey -Name "Place2" -Value "Z:\"         -PropertyType String -Force | Out-Null
+    New-ItemProperty -Path $placesKey -Name "Place0" -Value "W:\"         -PropertyType String -Force | Out-Null
+    New-ItemProperty -Path $placesKey -Name "Place1" -Value $UserPending  -PropertyType String -Force | Out-Null
+    New-ItemProperty -Path $placesKey -Name "Place2" -Value "Z:\"         -PropertyType String -Force | Out-Null
 }
 
 # ============================================================

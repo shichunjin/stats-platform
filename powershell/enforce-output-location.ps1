@@ -6,7 +6,7 @@
     本脚本与 login.ps1 配合，构成"软件生成文件输出到各自指定目录"的强制保障。
     目录约定（与 app/config.py、setup-workspace-drive.ps1 一致）：
       W: = \\127.0.0.1\workspace\<用户名>   工作/输出，NTFS 仅本人可写
-      P: 概念上的待导出目录 = \\127.0.0.1\pending\<用户名>（登录脚本建桌面快捷方式）
+      待导出目录 = \\127.0.0.1\pending\<用户名>（登录脚本建桌面快捷方式，不映射盘符）
       Z: = \\127.0.0.1\StatsData             原始数据，只读
 
     本脚本（机器级，对所有后续安装的软件同样生效）：
@@ -51,8 +51,8 @@ $StataMarker = "* >>> stats-platform enforce-output-location"
 Write-Host "[1/4] 锁定机器级通用文件对话框位置栏（W: / Z:）..." -ForegroundColor Yellow
 $placesHklm = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\ComDlg32\PlacesBar"
 New-Item -Path $placesHklm -Force | Out-Null
-New-Item -Property -Path $placesHklm -Name "Place0" -Value "W:\" -PropertyType String -Force | Out-Null
-New-Item -Property -Path $placesHklm -Name "Place1" -Value "Z:\" -PropertyType String -Force | Out-Null
+New-ItemProperty -Path $placesHklm -Name "Place0" -Value "W:\" -PropertyType String -Force | Out-Null
+New-ItemProperty -Path $placesHklm -Name "Place1" -Value "Z:\" -PropertyType String -Force | Out-Null
 Write-Host "      所有标准打开/另存为对话框的快捷位置已锁定。" -ForegroundColor Green
 
 # ============================================================
