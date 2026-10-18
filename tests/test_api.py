@@ -6,7 +6,7 @@ import tempfile
 import pytest
 
 from app.auth import create_access_token
-from app.models import User, Scope, PendingFile, ExportResult, AuditLog, Session as SessionModel
+from app.models import User, Scope, PendingFile, ExportResult, AuditLog, Message, Session as SessionModel
 from app.config import settings
 
 
@@ -424,6 +424,54 @@ class TestAdminExportReview:
         assert resp.status_code == 409
         pf = db_session.query(PendingFile).filter(PendingFile.id == pid).first()
         assert pf.status == "pending"  # 状态未被推进
+
+
+class TestPaginationAndConcurrency:
+    """性能修复 C2/C3：列表分页 + 审批并发认领"""
+
+    def test_admin_users_pagination(self, client, test_admin, test_user, admin_headers):
+        """C2：/admin/users 支持 skip/limit"""
+        r1 = client.get("/admin/users?limit=1&skip=0", headers=admin_headers)
+        r2 = client.get("/admin/users?limit=1&skip=1", headers=admin_headers)
+        assert r1.status_code == 200 and r2.status_code == 200
+        assert len(r1.json()) == 1 and len(r2.json()) == 1
+        assert r1.json()[0]["id"] != r2.json()[0]["id"]
+
+    def test_admin_pending_pagination(self, client, test_user, test_admin,
+                                      auth_headers, admin_headers, pending_dir):
+        """C2：/admin/pending 支持 limit 截断"""
+        for name in ("page1.csv", "page2.csv"):
+            with open(os.path.join(pending_dir, name), "w", encoding="utf-8-sig", newline="") as f:
+                f.write("mean\n1.0\n")
+        client.post("/results/request-export", headers=auth_headers)
+        resp = client.get("/admin/pending?limit=1", headers=admin_headers)
+        assert resp.status_code == 200
+        assert len(resp.json()) == 1
+
+    def test_double_approve_single_export(self, client, test_user, test_admin,
+                                          auth_headers, admin_headers, pending_dir, db_session):
+        """C3：双击 approve（并发重试）只产生一条 ExportResult"""
+        csv_path = os.path.join(pending_dir, "once.csv")
+        with open(csv_path, "w", encoding="utf-8-sig", newline="") as f:
+            f.write("mean\n1.0\n")
+        client.post("/results/request-export", headers=auth_headers)
+        pid = client.get("/results/mine", headers=auth_headers).json()["pending"][0]["id"]
+
+        r1 = client.post(f"/admin/pending/{pid}/approve", headers=admin_headers, json={})
+        r2 = client.post(f"/admin/pending/{pid}/approve", headers=admin_headers, json={})
+        assert r1.status_code == 200
+        assert r2.status_code == 400  # 已被处理，不得重复发布
+        exports = db_session.query(ExportResult).filter(ExportResult.user_id == test_user.id).all()
+        assert len(exports) == 1
+
+    def test_messages_pagination(self, client, test_user, auth_headers, db_session):
+        """C2：/messages 支持 skip/limit"""
+        db_session.add(Message(user_id=test_user.id, title="t1", content="c1"))
+        db_session.add(Message(user_id=test_user.id, title="t2", content="c2"))
+        db_session.commit()
+        resp = client.get("/messages?limit=1", headers=auth_headers)
+        assert resp.status_code == 200
+        assert len(resp.json()) == 1
 
 
 class TestResultsDownload:

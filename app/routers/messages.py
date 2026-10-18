@@ -1,5 +1,5 @@
 """消息中心路由：消息列表、标记已读、全部已读"""
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
 from app.database import get_db
@@ -21,8 +21,10 @@ def _to_dict(m: Message) -> dict:
     }
 
 
-@router.get("", summary="获取我的消息列表", description="按时间倒序返回当前用户的站内消息。")
+@router.get("", summary="获取我的消息列表", description="按时间倒序返回当前用户的站内消息。支持 skip/limit 分页（性能修复 C2）。")
 def list_messages(
+    skip: int = Query(0, ge=0, description="跳过记录数"),
+    limit: int = Query(100, ge=1, le=500, description="返回条数上限"),
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
@@ -30,6 +32,7 @@ def list_messages(
         db.query(Message)
         .filter(Message.user_id == user.id)
         .order_by(Message.created_at.desc(), Message.id.desc())
+        .offset(skip).limit(limit)
         .all()
     )
     return [_to_dict(m) for m in msgs]

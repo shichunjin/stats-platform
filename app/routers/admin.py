@@ -4,7 +4,7 @@ import shutil
 import ipaddress
 from fastapi import APIRouter, Depends, Query, HTTPException, Request
 from pydantic import BaseModel
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 from app.database import get_db
 from app.models import User, AuditLog, PendingFile, ExportResult, Scope
 from app.auth import get_current_user, require_admin
@@ -54,18 +54,26 @@ def get_audit_logs(
 
 返回所有 `status=pending` 的导出申请，按创建时间倒序排列。
 
+**查询参数（性能修复 C2：分页）**
+- `skip`：跳过记录数，默认 0
+- `limit`：返回条数上限，默认 100，最大 500
+
 **错误码**
 - `401`：未认证
 - `403`：非管理员
 """)
 def get_all_pending(
+    skip: int = Query(0, ge=0, description="跳过记录数"),
+    limit: int = Query(100, ge=1, le=500, description="返回条数上限"),
     admin: User = Depends(require_admin),
     db: Session = Depends(get_db),
 ):
     """查看所有待审核的导出申请（管理员）"""
     return db.query(PendingFile).filter(
         PendingFile.status == "pending"
-    ).order_by(PendingFile.created_at.desc()).all()
+    ).order_by(
+        PendingFile.created_at.desc(), PendingFile.id.desc()
+    ).offset(skip).limit(limit).all()
 
 
 def _published_dir(result_id: int) -> str:
@@ -95,7 +103,11 @@ def approve_pending(
     db: Session = Depends(get_db),
 ):
     client_ip = get_client_ip(request)
-    pf = db.query(PendingFile).filter(PendingFile.id == pending_id).first()
+    # 性能修复 C3：行锁读取（PostgreSQL SELECT ... FOR UPDATE；SQLite 为 no-op，
+    # 由下方「status 条件更新 rowcount==1」兜底并发双击）
+    pf = db.query(PendingFile).filter(
+        PendingFile.id == pending_id
+    ).with_for_update().first()
     if pf is None:
         raise HTTPException(status_code=404, detail="申请不存在")
     if pf.status != "pending":
@@ -125,6 +137,18 @@ def approve_pending(
                 detail="文件内容与申请时不一致（可能已被修改），请驳回该申请并要求用户重新提交",
             )
 
+    # 性能修复 C3：先以「status=pending」条件更新认领该申请，rowcount==1 才复制文件。
+    # 两个管理员并行点击 approve 时，未抢到更新的一方直接 409，
+    # 保证同一申请只会产生一条 ExportResult（前面未提交任何变更，直接报错即可安全回滚）。
+    claimed = db.query(PendingFile).filter(
+        PendingFile.id == pending_id,
+        PendingFile.status == "pending",
+    ).update({"status": "approved"}, synchronize_session=False)
+    if claimed != 1:
+        db.rollback()
+        raise HTTPException(status_code=409, detail="该申请已被其他管理员处理，请刷新列表")
+    pf.status = "approved"  # 同步会话内对象状态（条件更新绕过了会话缓存）
+
     pub_dir = _published_dir(pf.id)
     pub_path = os.path.join(pub_dir, pf.file_name)
     shutil.copy2(pf.file_path, pub_path)
@@ -143,7 +167,6 @@ def approve_pending(
     )
     db.add(exp)
 
-    pf.status = "approved"
     pf.review_reason = req.reason or "审核通过"
     pf.reviewed_by = admin.id
 
@@ -202,16 +225,25 @@ def reject_pending(
 
 返回用户列表，每个用户包含所属部门（dept）和可访问的项目范围（scopes）。
 
+**查询参数（性能修复 C2：分页 + joinedload 消除 N+1）**
+- `skip`：跳过记录数，默认 0
+- `limit`：返回条数上限，默认 500，最大 1000
+
 **错误码**
 - `401`：未认证
 - `403`：非管理员
 """)
 def get_all_users(
+    skip: int = Query(0, ge=0, description="跳过记录数"),
+    limit: int = Query(500, ge=1, le=1000, description="返回条数上限"),
     admin: User = Depends(require_admin),
     db: Session = Depends(get_db),
 ):
     """查看所有用户（管理员）"""
-    return db.query(User).order_by(User.id).all()
+    # 性能修复 C2：joinedload 一次性取回 dept/scopes，避免逐用户 N+1 查询
+    return db.query(User).options(
+        joinedload(User.dept), joinedload(User.scopes),
+    ).order_by(User.id).offset(skip).limit(limit).all()
 
 
 @router.get("/scopes", response_model=list[ScopeOut], summary="查看所有数据范围", description="""

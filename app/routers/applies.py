@@ -2,7 +2,7 @@
 from datetime import datetime
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request, Query
 from sqlalchemy.orm import Session
 
 from app.database import get_db
@@ -86,6 +86,8 @@ def create_apply(
 
 @router.get("/user/data-applies", summary="我的数据申请列表")
 def my_applies(
+    skip: int = Query(0, ge=0, description="跳过记录数"),
+    limit: int = Query(100, ge=1, le=500, description="返回条数上限"),
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
@@ -93,6 +95,7 @@ def my_applies(
         db.query(DataApply)
         .filter(DataApply.user_id == user.id)
         .order_by(DataApply.created_at.desc(), DataApply.id.desc())
+        .offset(skip).limit(limit)  # 性能修复 C2：分页
         .all()
     )
     return [_to_dict(a) for a in rows]
@@ -105,6 +108,8 @@ def my_applies(
 @router.get("/admin/data-applies", summary="数据申请队列（管理员）")
 def admin_list_applies(
     status: Optional[str] = None,
+    skip: int = Query(0, ge=0, description="跳过记录数"),
+    limit: int = Query(100, ge=1, le=500, description="返回条数上限"),
     admin: User = Depends(require_admin),
     db: Session = Depends(get_db),
 ):
@@ -113,7 +118,9 @@ def admin_list_applies(
         if status not in VALID_STATUSES:
             raise HTTPException(status_code=422, detail=f"非法状态: {status}")
         q = q.filter(DataApply.status == status)
-    rows = q.order_by(DataApply.created_at.desc(), DataApply.id.desc()).all()
+    rows = q.order_by(
+        DataApply.created_at.desc(), DataApply.id.desc()
+    ).offset(skip).limit(limit).all()  # 性能修复 C2：分页
     return [_to_dict(a) for a in rows]
 
 
