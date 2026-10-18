@@ -1,12 +1,13 @@
 """会话路由: POST /session/connect"""
 import logging
 import uuid
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.orm import Session
 from app.database import get_db
 from app.models import User, Session as SessionModel, AuditLog
 from app.auth import get_current_user
 from app.config import settings
+from app.rate_limit import get_client_ip
 from app.schemas import SessionOut
 from app.guac import (
     guac_sync_enabled, get_user_connection_id, ensure_user_connection,
@@ -39,6 +40,7 @@ router = APIRouter(prefix="/session", tags=["会话"])
 - `503`：Guacamole 侧未就绪（未启用 JDBC 同步，或用户未同步，需修改一次密码或联系管理员）
 """)
 def connect_session(
+    request: Request,
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
@@ -86,6 +88,7 @@ def connect_session(
         user_id=user.id,
         action="session_connect",
         detail=f"连接数据分析PC, guac_id={guac_id}, connection_id={connection_ref}",
+        ip_addr=get_client_ip(request),
     ))
     db.commit()
     db.refresh(session)

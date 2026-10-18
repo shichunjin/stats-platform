@@ -65,6 +65,8 @@ class PendingFile(Base):
     file_path = Column(String(512), nullable=False)
     file_size = Column(BigInteger)
     file_type = Column(String(16))
+    # 申请时文件内容 SHA256（B9）：审核通过前复核，防「申请后改写文件」绕过审查
+    content_sha = Column(String(64))
     status = Column(String(16), default="pending")    # pending|approved|rejected
     review_reason = Column(Text)
     reviewed_at = Column(DateTime)

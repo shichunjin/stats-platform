@@ -2,13 +2,15 @@
 import os
 import shutil
 import ipaddress
-from fastapi import APIRouter, Depends, Query, HTTPException
+from fastapi import APIRouter, Depends, Query, HTTPException, Request
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 from app.database import get_db
 from app.models import User, AuditLog, PendingFile, ExportResult, Scope
 from app.auth import get_current_user, require_admin
 from app.config import settings
+from app.rate_limit import get_client_ip
+from app.review import file_sha256
 from app.schemas import (
     AuditLogOut, PendingFileOut, UserAdminOut, ScopeOut, ScopeAssignRequest,
     ExportReviewRequest,
@@ -88,9 +90,11 @@ def _published_dir(result_id: int) -> str:
 def approve_pending(
     pending_id: int,
     req: ExportReviewRequest,
+    request: Request,
     admin: User = Depends(require_admin),
     db: Session = Depends(get_db),
 ):
+    client_ip = get_client_ip(request)
     pf = db.query(PendingFile).filter(PendingFile.id == pending_id).first()
     if pf is None:
         raise HTTPException(status_code=404, detail="申请不存在")
@@ -99,6 +103,27 @@ def approve_pending(
 
     if not os.path.exists(pf.file_path):
         raise HTTPException(status_code=400, detail="源文件已丢失")
+
+    # 安全修复 B9：审核通过前复核文件内容与申请时一致，
+    # 防止「申请后改写待导出文件」使未经审查的内容被发布。
+    if pf.content_sha:
+        try:
+            current_sha = file_sha256(pf.file_path)
+        except OSError:
+            raise HTTPException(status_code=400, detail="源文件已丢失")
+        if current_sha != pf.content_sha:
+            db.add(AuditLog(
+                user_id=admin.id,
+                action="export_approved",
+                detail=f"审核通过被阻止（文件内容已变更）: {pf.file_name} (id={pending_id}, 用户id={pf.user_id})",
+                status="failed",
+                ip_addr=client_ip,
+            ))
+            db.commit()
+            raise HTTPException(
+                status_code=409,
+                detail="文件内容与申请时不一致（可能已被修改），请驳回该申请并要求用户重新提交",
+            )
 
     pub_dir = _published_dir(pf.id)
     pub_path = os.path.join(pub_dir, pf.file_name)
@@ -126,6 +151,7 @@ def approve_pending(
         user_id=admin.id,
         action="export_approved",
         detail=f"审核通过导出申请 {pf.file_name} (id={pending_id}, 用户id={pf.user_id})",
+        ip_addr=client_ip,
     ))
     db.commit()
     db.refresh(pf)
@@ -146,6 +172,7 @@ def approve_pending(
 def reject_pending(
     pending_id: int,
     req: ExportReviewRequest,
+    request: Request,
     admin: User = Depends(require_admin),
     db: Session = Depends(get_db),
 ):
@@ -163,6 +190,7 @@ def reject_pending(
         user_id=admin.id,
         action="export_rejected",
         detail=f"审核拒绝导出申请 {pf.file_name} (id={pending_id}, 用户id={pf.user_id}): {pf.review_reason}",
+        ip_addr=get_client_ip(request),
     ))
     db.commit()
     db.refresh(pf)
@@ -221,6 +249,7 @@ def get_all_scopes(
 def assign_user_scopes(
     user_id: int,
     req: ScopeAssignRequest,
+    request: Request,
     admin: User = Depends(require_admin),
     db: Session = Depends(get_db),
 ):
@@ -251,6 +280,7 @@ def assign_user_scopes(
         user_id=admin.id,
         action="assign_scopes",
         detail=f"为用户 {user.username}(id={user_id}) 分配数据权限: dept_id={req.dept_id}, scopes={req.scope_ids}",
+        ip_addr=get_client_ip(request),
     ))
     db.commit()
     db.refresh(user)
@@ -302,9 +332,11 @@ def _is_allowed_test_host(host: str) -> bool:
 """)
 def test_platform_connection(
     req: PlatformTestRequest,
+    request: Request,
     admin: User = Depends(require_admin),
     db: Session = Depends(get_db),
 ):
+    client_ip = get_client_ip(request)
     # 安全修复 B3：SSRF 防护——限制可测试的目标主机
     if not _is_allowed_test_host(req.host):
         db.add(AuditLog(
@@ -312,6 +344,7 @@ def test_platform_connection(
             action="platform_test",
             detail=f"测试连接被拒绝（目标不允许）: {req.host}:{req.port}",
             status="failed",
+            ip_addr=client_ip,
         ))
         db.commit()
         raise HTTPException(
@@ -341,6 +374,7 @@ def test_platform_connection(
             user_id=admin.id,
             action="platform_test",
             detail=f"测试连接数据分析PC成功: {req.host}:{req.port} ({latency_ms}ms)",
+            ip_addr=client_ip,
         ))
         db.commit()
         return {"success": True, "message": f"连接成功（{latency_ms}ms）", "latency_ms": latency_ms}
@@ -360,6 +394,7 @@ def test_platform_connection(
         action="platform_test",
         detail=f"测试连接数据分析PC失败: {req.host}:{req.port} — {msg}",
         status="failed",
+        ip_addr=client_ip,
     ))
     db.commit()
     raise HTTPException(status_code=502, detail=msg)

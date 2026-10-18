@@ -1,11 +1,12 @@
 """数据路由：数据集导入 + 获取数据生成 Excel + 列结构分析 + 按筛选生成"""
 import os
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.orm import Session
 from app.database import get_db
 from app.models import User, AuditLog, Message, DataApply
 from app.auth import get_current_user, require_admin
 from app.config import settings
+from app.rate_limit import get_client_ip
 from app.dataset import (
     import_csv_to_db,
     generate_filtered_excel_from_table,
@@ -30,10 +31,12 @@ router = APIRouter(prefix="/data", tags=["数据"])
 - `403`：非管理员
 """)
 def import_dataset(
+    request: Request,
     csv_path: str | None = None,
     admin: User = Depends(require_admin),
     db: Session = Depends(get_db),
 ):
+    client_ip = get_client_ip(request)
     path = csv_path or settings.dataset_csv_path
 
     # 安全修复 B4：限制可导入的路径，防止本地文件读取（LFI）
@@ -48,6 +51,7 @@ def import_dataset(
             action="dataset_import",
             detail=f"导入被拒绝（路径不允许）: {path}",
             status="failed",
+            ip_addr=client_ip,
         ))
         db.commit()
         raise HTTPException(
@@ -64,6 +68,7 @@ def import_dataset(
         user_id=admin.id,
         action="dataset_import",
         detail=f"导入数据集 {meta.name}: {meta.total_rows} 行, {len(meta.column_names or [])} 列",
+        ip_addr=client_ip,
     ))
     db.commit()
 
@@ -129,13 +134,31 @@ def get_columns(
 """)
 def generate_filtered(
     payload: FilteredDataGenerateRequest,
+    request: Request,
     admin: User = Depends(require_admin),
     db: Session = Depends(get_db),
 ):
+    client_ip = get_client_ip(request)
     # 校验目标用户
     target = db.query(User).filter(User.id == payload.target_user_id).first()
     if target is None:
         raise HTTPException(status_code=404, detail="目标用户不存在")
+
+    # 安全修复 B7：scopes 权限消费——目标用户未被分配数据权限时拒绝生成
+    # （无 scope 拒绝取数），防止「申请后权限被吊销」仍拿到数据。
+    if not target.scopes:
+        db.add(AuditLog(
+            user_id=admin.id,
+            action="data_generate",
+            detail=f"生成被拒绝（目标用户 {target.username}(id={target.id}) 未分配数据权限 scopes）",
+            status="failed",
+            ip_addr=client_ip,
+        ))
+        db.commit()
+        raise HTTPException(
+            status_code=400,
+            detail=f"用户 {target.username} 尚未被分配数据权限（scopes），请先在「用户数据权限」页面分配后再生成",
+        )
 
     # 安全修复 A1/B6：生成必须绑定有效申请，且申请属于目标用户、处于可处理状态。
     # with_for_update 行锁防止并发重复生成/重复置完成。
@@ -219,6 +242,7 @@ def generate_filtered(
         action="data_generate",
         detail=f"为用户 {target.username}(id={target.id}) 生成 {filename}: "
                f"{rows} 行, {columns} 列，筛选 {len(payload.filters)} 项，推送至 {win_path}",
+        ip_addr=client_ip,
     ))
     db.commit()
 

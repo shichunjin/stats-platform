@@ -198,6 +198,20 @@ def scan_pending_directory(pending_dir: str) -> list:
     return result
 
 
+def file_sha256(file_path: str) -> str:
+    """计算文件内容的 SHA256（分块读取，支持大文件）。
+
+    安全修复 B9：导出申请时记录内容哈希，管理员审核通过前复核，
+    防止「申请后改写同名待导出文件」使未审查内容被发布。
+    """
+    import hashlib
+    h = hashlib.sha256()
+    with open(file_path, "rb") as f:
+        for chunk in iter(lambda: f.read(1024 * 1024), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
 # ============================================================
 # 与原始数据集的相似度比对（免审 / 转人工审核的依据）
 # ============================================================

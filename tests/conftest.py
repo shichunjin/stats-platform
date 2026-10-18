@@ -120,11 +120,28 @@ def test_scope(db_session):
 
 @pytest.fixture
 def test_user(db_session, test_scope):
-    """创建测试普通用户"""
+    """创建测试普通用户（默认持有 test_scope 数据权限——B7 修复后，
+    无 scopes 的用户将被拒绝生成/导出；需验证门禁的用例改用 test_user_no_scope）"""
     user = User(
         username="user1",
         display_name="测试用户1",
         dept_id=test_scope.id,
+        role="user",
+        is_active=True,
+    )
+    user.scopes = [test_scope]
+    db_session.add(user)
+    db_session.commit()
+    db_session.refresh(user)
+    return user
+
+
+@pytest.fixture
+def test_user_no_scope(db_session):
+    """创建无数据权限（scopes 为空）的测试用户，用于验证 B7 权限门禁"""
+    user = User(
+        username="user_noscope",
+        display_name="无权限用户",
         role="user",
         is_active=True,
     )

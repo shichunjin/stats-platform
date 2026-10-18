@@ -2,12 +2,13 @@
 from datetime import datetime
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.models import User, DataApply, Message, AuditLog
 from app.auth import get_current_user, require_admin
+from app.rate_limit import get_client_ip
 from app.schemas import DataApplyCreate, DataApplyRejectRequest
 
 router = APIRouter(tags=["数据申请"])
@@ -55,6 +56,7 @@ def _to_dict(a: DataApply) -> dict:
 @router.post("/user/data-applies", summary="提交数据申请")
 def create_apply(
     payload: DataApplyCreate,
+    request: Request,
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
@@ -75,7 +77,8 @@ def create_apply(
     )
     db.add(apply_obj)
     db.add(AuditLog(user_id=user.id, action="data_apply_create",
-                    detail=f"提交数据申请，用途：{payload.purpose[:50]}"))
+                    detail=f"提交数据申请，用途：{payload.purpose[:50]}",
+                    ip_addr=get_client_ip(request)))
     db.commit()
     db.refresh(apply_obj)
     return _to_dict(apply_obj)
@@ -117,6 +120,7 @@ def admin_list_applies(
 @router.post("/admin/data-applies/{apply_id}/process", summary="申请进入处理中（管理员）")
 def admin_process_apply(
     apply_id: int,
+    request: Request,
     admin: User = Depends(require_admin),
     db: Session = Depends(get_db),
 ):
@@ -131,7 +135,8 @@ def admin_process_apply(
     apply_obj.processed_by = admin.id
 
     db.add(AuditLog(user_id=admin.id, action="data_apply_process",
-                    detail=f"申请 #{apply_obj.id} 进入处理中"))
+                    detail=f"申请 #{apply_obj.id} 进入处理中",
+                    ip_addr=get_client_ip(request)))
     db.commit()
     db.refresh(apply_obj)
     return _to_dict(apply_obj)
@@ -141,6 +146,7 @@ def admin_process_apply(
 def admin_reject_apply(
     apply_id: int,
     payload: DataApplyRejectRequest,
+    request: Request,
     admin: User = Depends(require_admin),
     db: Session = Depends(get_db),
 ):
@@ -163,7 +169,8 @@ def admin_reject_apply(
         link="/user/my-requests",
     ))
     db.add(AuditLog(user_id=admin.id, action="data_apply_reject",
-                    detail=f"驳回申请 #{apply_obj.id}：{payload.reason}"))
+                    detail=f"驳回申请 #{apply_obj.id}：{payload.reason}",
+                    ip_addr=get_client_ip(request)))
     db.commit()
     db.refresh(apply_obj)
     return _to_dict(apply_obj)

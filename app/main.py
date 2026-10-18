@@ -29,6 +29,23 @@ def _migrate_schema():
                 conn.execute(text("ALTER TABLE users ADD COLUMN password_version INTEGER DEFAULT 1"))
                 conn.commit()
             logger.info("已迁移: users 表新增 password_version 列")
+    if "pending_files" in insp.get_table_names():
+        cols = [c["name"] for c in insp.get_columns("pending_files")]
+        if "content_sha" not in cols:
+            with engine.connect() as conn:
+                conn.execute(text("ALTER TABLE pending_files ADD COLUMN content_sha VARCHAR(64)"))
+                conn.commit()
+            logger.info("已迁移: pending_files 表新增 content_sha 列")
+        # 安全修复 B9：同一用户同名同内容仅允许一条 pending/approved 申请，
+        # 唯一索引兜底并发双申请导致的重复发布；rejected 不占用唯一位（允许修正后重提）。
+        # 部分索引（SQLite/PostgreSQL 均支持）；存量行 content_sha 为 NULL，互不相等，不受影响。
+        with engine.connect() as conn:
+            conn.execute(text(
+                "CREATE UNIQUE INDEX IF NOT EXISTS ix_pending_files_active "
+                "ON pending_files (user_id, file_name, content_sha) "
+                "WHERE status IN ('pending', 'approved')"
+            ))
+            conn.commit()
 
 
 _migrate_schema()

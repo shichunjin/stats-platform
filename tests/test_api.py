@@ -5,6 +5,7 @@ import tempfile
 
 import pytest
 
+from app.auth import create_access_token
 from app.models import User, Scope, PendingFile, ExportResult, AuditLog, Session as SessionModel
 from app.config import settings
 
@@ -280,6 +281,29 @@ class TestResultsRequestExport:
         resp = client.post("/results/request-export")
         assert resp.status_code == 401
 
+    def test_request_rejected_without_scopes(self, client, test_user_no_scope):
+        """安全修复 B7：未分配数据权限（scopes 为空）的用户申请导出必须 403"""
+        token = create_access_token(
+            test_user_no_scope.id, test_user_no_scope.username, "user")
+        resp = client.post("/results/request-export",
+                           headers={"Authorization": f"Bearer {token}"})
+        assert resp.status_code == 403
+        assert "权限" in resp.json()["detail"]
+
+    def test_request_reregisters_changed_content(self, client, test_user, auth_headers, pending_dir):
+        """安全修复 B9：同名文件内容变更后重新申请，必须生成新申请并接受重新审查"""
+        csv_path = os.path.join(pending_dir, "changed.csv")
+        with open(csv_path, "w", encoding="utf-8-sig", newline="") as f:
+            f.write("mean\n1.0\n")
+        resp1 = client.post("/results/request-export", headers=auth_headers)
+        assert resp1.json()["registered"] == 1
+
+        # 同名但内容变更 → 不得跳过，生成新申请
+        with open(csv_path, "w", encoding="utf-8-sig", newline="") as f:
+            f.write("mean,std\n2.0,3.0\n")
+        resp2 = client.post("/results/request-export", headers=auth_headers)
+        assert resp2.json()["registered"] == 1
+
 
 class TestAdminExportReview:
     """管理员审核导出申请测试"""
@@ -335,6 +359,21 @@ class TestAdminExportReview:
         resp = client.get("/admin/pending", headers=admin_headers)
         assert resp.status_code == 200
         assert all(p["status"] == "pending" for p in resp.json())
+
+    def test_approve_blocked_when_content_changed(
+            self, client, test_user, test_admin, auth_headers, admin_headers,
+            pending_dir, db_session):
+        """安全修复 B9：申请后改写文件内容，审核通过必须被阻止（409）"""
+        pid = self._submit(client, auth_headers, pending_dir)
+
+        # 用户在审核前改写待导出文件内容（模拟绕过审查）
+        with open(os.path.join(pending_dir, "result.csv"), "w", encoding="utf-8-sig", newline="") as f:
+            f.write("mean,std,evil\n9.9,8.8,7.7\n")
+
+        resp = client.post(f"/admin/pending/{pid}/approve", headers=admin_headers, json={})
+        assert resp.status_code == 409
+        pf = db_session.query(PendingFile).filter(PendingFile.id == pid).first()
+        assert pf.status == "pending"  # 状态未被推进
 
 
 class TestResultsDownload:

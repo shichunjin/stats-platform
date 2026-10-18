@@ -15,9 +15,13 @@ from app.config import settings
 from app.models import User, DataApply
 
 
-def _make_user(db_session, scope, username: str, role: str = "user"):
+def _make_user(db_session, scope, username: str, role: str = "user", with_scope: bool = True):
     user = User(username=username, display_name=username, dept_id=scope.id,
                 role=role, is_active=True)
+    # B7 修复后，无 scopes 的用户会被拒绝生成；默认赋予测试范围，
+    # 需验证门禁的用例传 with_scope=False
+    if with_scope:
+        user.scopes = [scope]
     db_session.add(user)
     db_session.commit()
     db_session.refresh(user)
@@ -163,3 +167,26 @@ def test_generate_rejects_rejected_apply(client, admin_headers, db_session,
         "apply_id": apply_obj.id,
     })
     assert resp.status_code == 400
+
+
+# ---- scopes 权限消费（B7） ----
+
+def test_generate_rejects_scopeless_user(client, admin_headers, db_session,
+                                         test_scope, monkeypatch):
+    """安全修复 B7：目标用户未分配 scopes 时拒绝生成（无 scope 拒绝取数）"""
+    _patch_filtered_generator(monkeypatch)
+    target, _ = _make_user(db_session, test_scope, "gen_noscope", with_scope=False)
+    apply_obj = _create_apply(db_session, target.id, status="pending")
+
+    resp = client.post("/data/generate", headers=admin_headers, json={
+        "target_user_id": target.id,
+        "filters": {"sex33": 1},
+        "filename": "subset.xlsx",
+        "apply_id": apply_obj.id,
+    })
+    assert resp.status_code == 400
+    assert "权限" in resp.json()["detail"]
+
+    # 申请状态不得被推进
+    db_session.refresh(apply_obj)
+    assert apply_obj.status == "pending"

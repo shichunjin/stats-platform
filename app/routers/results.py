@@ -21,14 +21,16 @@ import os
 import re
 import shutil
 from datetime import datetime, timedelta
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import FileResponse
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from app.database import get_db
 from app.models import User, PendingFile, ExportResult, AuditLog
 from app.auth import get_current_user
 from app.config import settings
-from app.review import scan_pending_directory, decide_export_review, review_result
+from app.rate_limit import get_client_ip
+from app.review import scan_pending_directory, decide_export_review, review_result, file_sha256
 from app.schemas import PendingFileOut, ExportResultOut
 from app.transfer import list_remote_files, download_file_from_windows
 
@@ -143,9 +145,28 @@ def get_my_results(
 - `502`：无法连接 Windows 云平台读取待导出目录
 """)
 def request_export(
+    request: Request,
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
+    client_ip = get_client_ip(request)
+
+    # 安全修复 B7：scopes 权限消费——未分配数据权限的用户禁止申请导出，
+    # 防止权限被吊销后结果外带；管理员不受此限（其本身拥有全部管理接口权限）。
+    if user.role != "admin" and not user.scopes:
+        db.add(AuditLog(
+            user_id=user.id,
+            action="export_requested",
+            detail="导出申请被拒绝（未分配数据权限 scopes）",
+            status="failed",
+            ip_addr=client_ip,
+        ))
+        db.commit()
+        raise HTTPException(
+            status_code=403,
+            detail="您尚未被分配数据权限，无法申请导出，请联系管理员在「用户数据权限」中分配",
+        )
+
     pending_dir = _user_pending_dir(user.id)
 
     # 先把用户在 Windows 待导出目录里的结果回拉到服务器（目录键为用户名）
@@ -166,9 +187,15 @@ def request_export(
     rejected: list[dict] = []
     for fpath in files:
         fname = os.path.basename(fpath)
+        # 安全修复 B9：以内容哈希判重——仅当「同名 + 同内容 + 状态 pending/approved」
+        # 才跳过；同名不同内容（用户改写后重提）生成新申请并接受重新审查；
+        # rejected 的同名文件允许重新申请（视为修正后重提）。
+        sha = file_sha256(fpath)
         existing = db.query(PendingFile).filter(
             PendingFile.user_id == user.id,
             PendingFile.file_name == fname,
+            PendingFile.content_sha == sha,
+            PendingFile.status.in_(("pending", "approved")),
         ).first()
         if existing:
             continue
@@ -181,9 +208,16 @@ def request_export(
             file_size=os.path.getsize(fpath),
             file_type=ext.lower().lstrip("."),
             status="pending",
+            content_sha=sha,
         )
-        db.add(pf)
-        db.flush()  # 取得 pf.id，供发布目录命名与 pending_file_id 关联
+        # 唯一索引 ix_pending_files_active 兜底并发重复申请（B9）：
+        # 冲突时回滚保存点并跳过本文件，不影响本次请求中其他文件。
+        try:
+            with db.begin_nested():
+                db.add(pf)
+                db.flush()  # 取得 pf.id，供发布目录命名与 pending_file_id 关联
+        except IntegrityError:
+            continue
 
         decision, reason, _score = decide_export_review(fpath)
 
@@ -204,6 +238,7 @@ def request_export(
                 user_id=user.id,
                 action="export_rejected",
                 detail=f"导出被拒绝 {fname} (id={pf.id})：{reason}",
+                ip_addr=client_ip,
             ))
             rejected.append({
                 "id": pf.id,
@@ -217,6 +252,7 @@ def request_export(
                 user_id=user.id,
                 action="export_auto_approved",
                 detail=f"免审核自动通过导出 {fname} (id={pf.id})：{reason}",
+                ip_addr=client_ip,
             ))
             auto_approved.append({
                 "id": pf.id,
@@ -240,6 +276,7 @@ def request_export(
             action="export_requested",
             detail=(f"申请导出 {len(need_review)} 个高相似度文件，等待管理员审核: "
                     f"{', '.join(r['file_name'] for r in need_review)}"),
+            ip_addr=client_ip,
         ))
 
     db.commit()
@@ -267,9 +304,11 @@ def request_export(
 """)
 def download_result(
     result_id: int,
+    request: Request,
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
+    client_ip = get_client_ip(request)
     exp = db.query(ExportResult).filter(
         ExportResult.id == result_id,
         ExportResult.user_id == user.id,
@@ -285,6 +324,7 @@ def download_result(
             action="result_download_expired",
             detail=f"下载被拒绝（已过期）：{exp.result_name} (id={result_id})",
             status="failed",
+            ip_addr=client_ip,
         ))
         db.commit()
         raise HTTPException(status_code=410, detail="文件已过期，无法下载")
@@ -297,6 +337,7 @@ def download_result(
         user_id=user.id,
         action="result_download",
         detail=f"下载结果 {exp.result_name} (id={result_id})",
+        ip_addr=client_ip,
     ))
     db.commit()
 
