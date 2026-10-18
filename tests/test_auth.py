@@ -6,9 +6,11 @@ from datetime import datetime, timedelta
 from app.auth import (
     verify_password,
     create_access_token,
+    get_current_user,
     DEMO_USERS,
 )
 from app.config import settings
+from app.models import User
 
 
 # ============================================================
@@ -114,6 +116,74 @@ class TestCreateAccessToken:
         token1 = create_access_token(1, "user1", "user")
         token2 = create_access_token(2, "user2", "user")
         assert token1 != token2
+
+
+# ============================================================
+# 测试：JWT 密码版本（B2 安全修复）
+# ============================================================
+
+class TestPasswordVersion:
+    """改密后旧 JWT 失效"""
+
+    def test_token_contains_password_version(self):
+        """新签发的 Token 包含 pwd_ver 字段"""
+        token = create_access_token(1, "user1", "user", password_version=3)
+        payload = jwt.decode(token, settings.jwt_secret, algorithms=[settings.jwt_algorithm])
+        assert payload["pwd_ver"] == 3
+
+    def test_old_token_without_version_rejected(self, db_session):
+        """无 pwd_ver 的旧 Token 应被拒绝（视为版本 0）"""
+        payload = {
+            "sub": "1",
+            "username": "user1",
+            "role": "user",
+            "exp": datetime.utcnow() + timedelta(hours=1),
+        }
+        old_token = jwt.encode(payload, settings.jwt_secret, algorithm=settings.jwt_algorithm)
+
+        user = User(id=1, username="user1", role="user", is_active=True, password_version=1)
+        db_session.add(user)
+        db_session.commit()
+
+        from fastapi import HTTPException
+        with pytest.raises(HTTPException) as exc_info:
+            get_current_user(token=old_token, db=db_session)
+        assert exc_info.value.status_code == 401
+        assert "已过期" in exc_info.value.detail
+
+        db_session.delete(user)
+        db_session.commit()
+
+    def test_version_mismatch_rejected(self, db_session):
+        """版本不匹配的 Token 应被拒绝"""
+        token = create_access_token(1, "user1", "user", password_version=1)
+
+        user = User(id=1, username="user1", role="user", is_active=True, password_version=2)
+        db_session.add(user)
+        db_session.commit()
+
+        from fastapi import HTTPException
+        with pytest.raises(HTTPException) as exc_info:
+            get_current_user(token=token, db=db_session)
+        assert exc_info.value.status_code == 401
+
+        db_session.delete(user)
+        db_session.commit()
+
+    def test_version_match_accepted(self, db_session):
+        """版本匹配的 Token 正常通过"""
+        token = create_access_token(1, "user1", "user", password_version=5)
+
+        user = User(id=1, username="user1", role="user", is_active=True, password_version=5)
+        db_session.add(user)
+        db_session.commit()
+
+        result = get_current_user(token=token, db=db_session)
+        assert result.id == 1
+        assert result.username == "user1"
+
+        db_session.delete(user)
+        db_session.commit()
 
 
 # ============================================================

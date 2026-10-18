@@ -108,11 +108,12 @@ def verify_password(username: str, password: str, db_user: Optional[User] = None
     return False
 
 
-def create_access_token(user_id: int, username: str, role: str) -> str:
+def create_access_token(user_id: int, username: str, role: str, password_version: int = 1) -> str:
     payload = {
         "sub": str(user_id),
         "username": username,
         "role": role,
+        "pwd_ver": password_version,
         "exp": datetime.utcnow() + timedelta(hours=settings.jwt_expire_hours),
     }
     return jwt.encode(payload, settings.jwt_secret, algorithm=settings.jwt_algorithm)
@@ -138,6 +139,16 @@ def get_current_user(
     user = db.query(User).filter(User.id == user_id, User.is_active == True).first()
     if user is None:
         raise credentials_exc
+
+    # 安全修复 B2：改密后旧 JWT 立即失效。
+    # 旧 token（无 pwd_ver 字段）视为版本 0，与当前版本（≥1）不匹配即拒绝。
+    token_pwd_ver = payload.get("pwd_ver", 0)
+    if token_pwd_ver != (user.password_version or 1):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="凭据已过期，请重新登录",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
     return user
 
 

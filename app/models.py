@@ -35,6 +35,7 @@ class User(Base):
     role = Column(String(16), default="user")        # user | admin
     is_active = Column(Boolean, default=True)
     password_hash = Column(String(256), nullable=True)  # 注册用户密码哈希（演示账号为空）
+    password_version = Column(Integer, default=1)       # 改密递增，用于 JWT 失效
     created_at = Column(DateTime, default=datetime.utcnow)
 
     dept = relationship("Scope", foreign_keys=[dept_id])

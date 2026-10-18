@@ -1,5 +1,5 @@
 """认证路由: POST /auth/register, POST /auth/login, GET /auth/me, POST /auth/change-password"""
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.orm import Session
 from app.database import get_db
 from app.models import User, AuditLog
@@ -10,6 +10,7 @@ from app.auth import (
 )
 from app.guac import upsert_guac_user
 from app.windows_account import sync_windows_user
+from app.rate_limit import rate_limit_auth, get_client_ip
 from app.schemas import (
     LoginRequest, TokenResponse, UserOut, RegisterRequest, RegisterResponse,
     ChangePasswordRequest,
@@ -34,7 +35,12 @@ router = APIRouter(prefix="/auth", tags=["认证"])
 - `422`：用户名/密码格式不合法
 - `502`：Windows 或 Guacamole 账号同步失败（平台账号不会创建，可修正后重试）
 """)
-def register(req: RegisterRequest, db: Session = Depends(get_db)):
+def register(
+    req: RegisterRequest,
+    request: Request,
+    _rl: None = Depends(rate_limit_auth),
+    db: Session = Depends(get_db),
+):
     # 用户名查重（包含演示账号保留名）
     if req.username in DEMO_ACCOUNTS:
         raise HTTPException(status_code=400, detail=f"用户名 '{req.username}' 已被占用")
@@ -77,6 +83,7 @@ def register(req: RegisterRequest, db: Session = Depends(get_db)):
         user_id=user.id,
         action="register",
         detail=f"新用户注册: {user.username}",
+        ip_addr=get_client_ip(request),
     ))
     db.commit()
 
@@ -104,20 +111,47 @@ def register(req: RegisterRequest, db: Session = Depends(get_db)):
 - `401`：用户名或密码错误
 - `403`：账号已被禁用
 """)
-def login(req: LoginRequest, db: Session = Depends(get_db)):
+def login(
+    req: LoginRequest,
+    request: Request,
+    _rl: None = Depends(rate_limit_auth),
+    db: Session = Depends(get_db),
+):
+    client_ip = get_client_ip(request)
     user = db.query(User).filter(User.username == req.username).first()
     if user is None:
+        db.add(AuditLog(
+            user_id=None,
+            action="login",
+            detail=f"登录失败（用户不存在）: {req.username}",
+            ip_addr=client_ip,
+            status="failed",
+        ))
+        db.commit()
         raise HTTPException(status_code=401, detail="用户名或密码错误")
 
     if not user.is_active:
         raise HTTPException(status_code=403, detail="账号已被禁用")
 
     if not verify_password(req.username, req.password, db_user=user):
+        db.add(AuditLog(
+            user_id=user.id,
+            action="login",
+            detail=f"登录失败（密码错误）: {req.username}",
+            ip_addr=client_ip,
+            status="failed",
+        ))
+        db.commit()
         raise HTTPException(status_code=401, detail="用户名或密码错误")
 
-    token = create_access_token(user.id, user.username, user.role)
+    token = create_access_token(user.id, user.username, user.role, user.password_version or 1)
 
-    db.add(AuditLog(user_id=user.id, action="login", detail=f"用户 {user.username} 登录"))
+    db.add(AuditLog(
+        user_id=user.id,
+        action="login",
+        detail=f"用户 {user.username} 登录",
+        ip_addr=client_ip,
+    ))
     db.commit()
 
     return TokenResponse(access_token=token)
@@ -152,6 +186,7 @@ def get_me(user: User = Depends(get_current_user)):
 """)
 def change_password(
     req: ChangePasswordRequest,
+    request: Request,
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
@@ -181,7 +216,13 @@ def change_password(
                             detail=f"Guacamole 密码同步失败，平台密码未修改: {e}")
 
     user.password_hash = hash_password(req.new_password)
-    db.add(AuditLog(user_id=user.id, action="change_password", detail=f"用户 {user.username} 修改密码"))
+    user.password_version = (user.password_version or 1) + 1
+    db.add(AuditLog(
+        user_id=user.id,
+        action="change_password",
+        detail=f"用户 {user.username} 修改密码",
+        ip_addr=get_client_ip(request),
+    ))
     db.commit()
 
     return {"message": "密码修改成功，Windows 云桌面与 Guacamole 登录密码已同步"}

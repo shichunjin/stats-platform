@@ -18,6 +18,22 @@ logger = logging.getLogger("stats-platform")
 Base.metadata.create_all(bind=engine)
 
 
+def _migrate_schema():
+    """轻量级启动时 schema 迁移：为既有表新增 ORM 中新增的列（幂等）"""
+    from sqlalchemy import text, inspect
+    insp = inspect(engine)
+    if "users" in insp.get_table_names():
+        cols = [c["name"] for c in insp.get_columns("users")]
+        if "password_version" not in cols:
+            with engine.connect() as conn:
+                conn.execute(text("ALTER TABLE users ADD COLUMN password_version INTEGER DEFAULT 1"))
+                conn.commit()
+            logger.info("已迁移: users 表新增 password_version 列")
+
+
+_migrate_schema()
+
+
 def _init_demo_data():
     """初始化演示账号和默认部门（仅在不存在时创建）"""
     db = SessionLocal()
