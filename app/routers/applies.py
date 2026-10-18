@@ -14,7 +14,9 @@ from app.schemas import DataApplyCreate, DataApplyRejectRequest
 router = APIRouter(tags=["数据申请"])
 
 VALID_PRIORITIES = {"low", "medium", "high"}
-VALID_STATUSES = {"pending", "processing", "completed", "rejected"}
+# 状态机：pending → processing → generating → completed / failed（C1 异步生成）
+# failed 可由管理员重新生成（回到 generating）；rejected 为终态
+VALID_STATUSES = {"pending", "processing", "generating", "completed", "failed", "rejected"}
 
 
 def _parse_dt(value: Optional[str]) -> Optional[datetime]:

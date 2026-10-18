@@ -46,6 +46,10 @@ class Settings(BaseSettings):
     # 免审自动通过的结果，下载有效期（天），与人工审核通过一致
     export_publish_valid_days: int = 30
 
+    # 后台生成任务的软超时（秒，C1）：Excel 生成超过该时长则在推送前中止并置 failed；
+    # SFTP 推送本身按连接/读写超时控制。线程无法被强杀，此为阶段间检查点机制
+    generate_timeout_seconds: int = 600
+
     # ---- Windows 云主机 SFTP 推送（生成的 Excel 推送到 Windows C:\StatsData） ----
     sftp_host: str = "8.133.223.251"
     sftp_port: int = 22
