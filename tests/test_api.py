@@ -139,6 +139,32 @@ class TestSessionConnect:
         assert resp.status_code == 503
         assert "GUAC_DB_URL" in resp.json()["detail"]
 
+    def test_connect_provisions_workspace(self, client, test_user, auth_headers, monkeypatch):
+        """连接时幂等补建私有工作区（老账号补偿）"""
+        self._enable_sync(monkeypatch)
+        monkeypatch.setattr("app.routers.session.windows_sync_enabled", lambda: True)
+        calls = []
+        monkeypatch.setattr(
+            "app.routers.session.provision_user_workspace",
+            lambda u, **kw: calls.append(u) or True,
+        )
+        resp = client.post("/session/connect", headers=auth_headers)
+        assert resp.status_code == 200
+        assert calls == [test_user.username]
+
+    def test_connect_provision_failure_not_blocking(self, client, test_user, auth_headers, monkeypatch):
+        """工作区开通失败只记日志，不阻断远程连接"""
+        self._enable_sync(monkeypatch)
+        monkeypatch.setattr("app.routers.session.windows_sync_enabled", lambda: True)
+
+        def boom(u, **kw):
+            raise RuntimeError("ssh down")
+
+        monkeypatch.setattr("app.routers.session.provision_user_workspace", boom)
+        resp = client.post("/session/connect", headers=auth_headers)
+        assert resp.status_code == 200
+        assert "guac_url" in resp.json()
+
     def test_connect_without_auth(self, client):
         """未认证返回 401"""
         resp = client.post("/session/connect")
