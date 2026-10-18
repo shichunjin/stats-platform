@@ -12,6 +12,26 @@
       </div>
     </template>
 
+    <el-alert type="info" :closable="false" class="export-guide">
+      <template #title>导出流程说明</template>
+      <ol class="export-guide__steps">
+        <li>
+          在 Windows 分析平台里，把要导出的结果文件放入桌面上的
+          <b>「待导出目录」</b>快捷方式打开的文件夹
+          （即 <code>\\127.0.0.1\pending\你的用户名</code>，仅本人可写），
+          <b>只有放进该目录的文件才能申请导出</b>；
+        </li>
+        <li>回到平台本页，点击右上角「申请导出结果」，系统登记待导出文件并自动审查；</li>
+        <li>
+          审查规则：与原始数据相似度低于 60% 且通过敏感信息检查的文本/图片文件
+          <b>免审自动发布</b>；高相似度文件、统计软件原生格式/压缩包/文档
+          （.dta/.rds/.sav/.xlsx/.zip/.pdf 等）转<b>管理员人工审核</b>；
+          不允许导出的未知类型将被<b>拒绝</b>；
+        </li>
+        <li>审核通过后文件出现在「已发布」列表，30 天内可随时下载。</li>
+      </ol>
+    </el-alert>
+
     <el-tabs v-model="activeTab">
       <el-tab-pane name="published">
         <template #label>
@@ -220,4 +240,13 @@ function simLevel(row: PendingFile): string {
   line-height: 18px;
 }
 .tab-badge { margin-left: 6px; }
+.export-guide { margin-bottom: 16px; border-radius: var(--radius-lg); }
+.export-guide__steps { margin: 6px 0 0; padding-left: 18px; }
+.export-guide__steps li { margin: 4px 0; line-height: 1.7; font-size: var(--fs-sm); color: var(--text-primary); }
+.export-guide__steps code {
+  padding: 1px 6px;
+  background: var(--color-primary-soft);
+  border-radius: var(--radius-sm);
+  font-size: var(--fs-xs);
+}
 </style>
