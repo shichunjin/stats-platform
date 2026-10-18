@@ -205,6 +205,14 @@ if ($IsAdmin -or -not (Test-Path $WDrive)) {
 }
 $Shell = New-Object -ComObject WScript.Shell
 
+# 历史补偿：W: 曾不可用期间，快捷方式/文件可能落在本地 profile 桌面
+# （3.2 的一次性迁移标记那时已置位，不会再复制）。每次登录做一次
+# robocopy 增量同步（幂等，仅复制差异），把本地桌面的存量内容补进 W:\Desktop。
+$profileDesktop = Join-Path $env:USERPROFILE "Desktop"
+if ((-not $IsAdmin) -and (Test-Path $WDrive) -and (Test-Path $profileDesktop)) {
+    robocopy $profileDesktop $Desktop /E /XJ /R:1 /W:1 /NFL /NDL /NJH /NJS /XF desktop.ini | Out-Null
+}
+
 # 软件快捷方式表：后续新装统计软件时，在此表追加一条即可（key/Path/Name）。
 # 快捷方式起始目录一律为 W:，用户打开/保存默认就在本人私有工作区；
 # 若该软件支持启动配置（类似 Rprofile.site / profile.do），另需在
