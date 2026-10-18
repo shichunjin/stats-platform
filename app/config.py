@@ -21,6 +21,10 @@ class Settings(BaseSettings):
     jwt_algorithm: str = "HS256"
     jwt_expire_hours: int = 8
 
+    # 认证接口限流（B1）：登录 5次/60s、注册 3次/300s，按客户端 IP 计数。
+    # 测试环境置 RATE_LIMIT_ENABLED=false 关闭（测试用例集中发自同一 IP，会误触阈值）。
+    rate_limit_enabled: bool = True
+
     # 演示账号密码（从环境变量读取；留空则禁用对应演示账号登录）
     demo_admin_password: str = ""
     demo_user_password: str = ""

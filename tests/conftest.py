@@ -5,7 +5,7 @@ from typing import Generator
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import create_engine, event
+from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 # 在导入 app 之前覆盖配置，使用 SQLite 内存数据库 + 临时目录
@@ -16,6 +16,11 @@ os.environ["DEMO_USER_PASSWORD"] = "user123"
 os.environ["FILESERVER_ROOT"] = tempfile.mkdtemp(prefix="stats_test_")
 # 测试环境不连真实 Windows 云主机同步本地账号
 os.environ["WINDOWS_ACCOUNT_SYNC"] = "false"
+# 测试环境关闭认证接口限流（B1）：全部用例发自同一 testclient IP，会误触阈值
+os.environ["RATE_LIMIT_ENABLED"] = "false"
+# 强制置空，防止在服务器上跑测试时读到生产 .env 的真实 Guacamole 库连接串
+# （否则 guac_sync_enabled() 为真，A4「未启用同步 503」用例失效，且可能写入真实 guac 库）
+os.environ["GUAC_DB_URL"] = ""
 
 # ---- 创建测试引擎并 monkey-patch database 模块 ----
 TEST_ENGINE = create_engine(
@@ -33,6 +38,8 @@ from app.config import settings
 settings.database_url = "sqlite:///:memory:"
 settings.jwt_secret = "test-secret-key-for-unit-tests"
 settings.fileserver_root = os.environ["FILESERVER_ROOT"]
+settings.guac_db_url = ""
+settings.rate_limit_enabled = False
 # 固定原始数据基线为不存在的路径：相似度规则下"无基线"安全默认转人工审核，
 # 使既有用例的审批流程断言保持确定性（相似度专项用例自行 monkeypatch）
 settings.dataset_csv_path = os.path.join(
@@ -62,19 +69,16 @@ app.dependency_overrides[get_db] = override_get_db
 
 @pytest.fixture(scope="function")
 def db_session():
-    """每个测试函数独立的数据库会话（使用 SAVEPOINT 实现隔离）"""
+    """每个测试函数独立的数据库会话。
+
+    SQLAlchemy 2.0 官方测试模式：外层事务 + join_transaction_mode="create_savepoint"，
+    会话 commit 只释放保存点、测试结束整体回滚实现隔离；路由代码中的
+    db.begin_nested()（B9 并发兜底保存点）在该模式下正常工作，
+    旧式 begin_nested + after_transaction_end 配方会与之冲突（事务被提前关闭）。
+    """
     connection = TEST_ENGINE.connect()
     transaction = connection.begin()
-    session = TestSessionLocal(bind=connection)
-
-    # 开始嵌套事务（SAVEPOINT）
-    session.begin_nested()
-
-    # 当 session commit 后，自动重新开始 SAVEPOINT
-    @event.listens_for(session, "after_transaction_end")
-    def restart_savepoint(session, transaction):
-        if transaction.nested and not transaction._parent.nested:
-            session.begin_nested()
+    session = TestSessionLocal(bind=connection, join_transaction_mode="create_savepoint")
 
     # 每个测试前清空数据
     for table in reversed(Base.metadata.sorted_tables):

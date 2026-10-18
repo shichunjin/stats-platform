@@ -10,6 +10,8 @@ from typing import Tuple
 
 from fastapi import HTTPException, Request
 
+from app.config import settings
+
 
 class SlidingWindowRateLimiter:
     """滑动窗口限流器（线程安全，内存实现）"""
@@ -60,6 +62,8 @@ def rate_limit_auth(request: Request) -> None:
     - 登录：每 IP 每 60 秒最多 5 次
     - 注册：每 IP 每 300 秒最多 3 次（注册即开 Windows 账号，需更严格）
     """
+    if not settings.rate_limit_enabled:
+        return  # 测试环境关闭限流（用例集中发自同一 IP，会误触阈值）
     ip = get_client_ip(request)
     path = request.url.path
 

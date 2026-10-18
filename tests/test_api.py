@@ -62,6 +62,12 @@ class TestProdAttackSurface:
         })
         assert resp.headers.get("access-control-allow-origin") == "https://chunjindevelop68.xyz"
 
+    def test_rate_limit_defaults_on(self):
+        """B1：rate_limit_enabled 生产默认值必须为 True（断言字段声明默认值，
+        不受环境变量 / .env 影响；测试环境由 conftest 显式关闭）"""
+        from app.config import Settings
+        assert Settings.model_fields["rate_limit_enabled"].default is True
+
 
 # ============================================================
 # 测试：认证路由 /auth
@@ -110,6 +116,17 @@ class TestAuthLogin:
         """缺少字段返回 422"""
         resp = client.post("/auth/login", json={"username": "admin"})
         assert resp.status_code == 422
+
+    def test_login_rate_limited_when_enabled(self, client, test_user, monkeypatch):
+        """安全修复 B1：限流开启时，同一 IP 登录超过 5 次/60s 返回 429。
+        （测试环境全局关闭限流——conftest 置 rate_limit_enabled=False，此处显式开启）"""
+        monkeypatch.setattr(settings, "rate_limit_enabled", True)
+        for _ in range(5):
+            resp = client.post("/auth/login", json={"username": "user1", "password": "user123"})
+            assert resp.status_code == 200
+        resp = client.post("/auth/login", json={"username": "user1", "password": "user123"})
+        assert resp.status_code == 429
+        assert "频繁" in resp.json()["detail"]
 
 
 class TestGetMe:
