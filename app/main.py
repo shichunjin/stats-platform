@@ -172,6 +172,24 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
+# 安全修复 C4：Content-Security-Policy 等安全响应头。
+# Token 存 localStorage 的现状下，CSP 是 XSS 窃取令牌的纵深防御：
+# 脚本仅允许同源（Vite 构建产物），样式放行内联（Element Plus 运行时注入），
+# 禁止被嵌入 iframe（clickjacking）。
+@app.middleware("http")
+async def security_headers(request: Request, call_next):
+    response = await call_next(request)
+    response.headers.setdefault(
+        "Content-Security-Policy",
+        "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; "
+        "img-src 'self' data:; font-src 'self' data:; connect-src 'self'; "
+        "frame-ancestors 'none'; base-uri 'self'; form-action 'self'",
+    )
+    response.headers.setdefault("X-Content-Type-Options", "nosniff")
+    response.headers.setdefault("Referrer-Policy", "same-origin")
+    return response
+
 app.include_router(auth.router)
 app.include_router(session.router)
 app.include_router(results.router)

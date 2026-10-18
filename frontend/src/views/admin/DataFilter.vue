@@ -46,7 +46,9 @@
         <el-button size="large" @click="resetFilters">重置筛选</el-button>
       </div>
 
-      <el-alert v-if="lastResult" :title="`已生成：${lastResult.filename}（${lastResult.rows} 行）`" type="success" :closable="false" style="margin-top: 16px" />
+      <el-alert v-if="lastResult" :title="`已受理，后台生成中：${lastResult.filename}`"
+                description="生成完成后用户将收到站内消息；失败可在「待处理申请」查看原因并重试"
+                type="success" :closable="false" style="margin-top: 16px" />
     </el-card>
 
     <!-- 错误日志 -->
@@ -90,7 +92,7 @@ const targetUserId = ref<number | undefined>(Number(route.query.userId) || undef
 const filename = ref('')
 const generating = ref(false)
 const filters = ref<Record<string, any>>({})
-const lastResult = ref<{ filename: string; rows: number } | null>(null)
+const lastResult = ref<{ filename: string } | null>(null)
 const errorLog = ref<{ time: string; message: string }[]>([])
 
 const filterRef = ref<InstanceType<typeof SmartFilter>>()
@@ -139,14 +141,16 @@ async function generate() {
     const ts = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}${String(now.getDate()).padStart(2, '0')}_${String(now.getHours()).padStart(2, '0')}${String(now.getMinutes()).padStart(2, '0')}${String(now.getSeconds()).padStart(2, '0')}`
     const finalName = filename.value || `testData_${ts}.xlsx`
 
+    // 性能修复 C1：生成已异步化——接口受理（置 generating）后立即返回，
+    // 后台执行 Excel 生成 + SFTP 推送，完成后站内消息通知用户
     const res = await generateFilteredData({
       filters: filters.value,
       target_user_id: targetUserId.value,
       filename: finalName,
       apply_id: Number(applyId),
     })
-    lastResult.value = { filename: res.filename, rows: res.rows }
-    ElMessage.success(`数据已生成并推送给用户：${res.filename}（${res.rows} 行）`)
+    lastResult.value = { filename: res.filename }
+    ElMessage.success(res.detail || `已受理，后台生成中：${res.filename}`)
   } catch (e: any) {
     errorLog.value.unshift({
       time: new Date().toLocaleString(),

@@ -135,7 +135,7 @@ class DataApply(Base):
     time_start = Column(DateTime)        # 时间范围起
     time_end = Column(DateTime)          # 时间范围止
     priority = Column(String(16), default="medium")   # low | medium | high
-    status = Column(String(16), default="pending")    # pending | processing | completed | rejected
+    status = Column(String(16), default="pending")    # pending | processing | generating | completed | failed | rejected
     reject_reason = Column(Text)
     processed_by = Column(Integer, ForeignKey("users.id"))
     finished_at = Column(DateTime)
@@ -157,3 +157,17 @@ class Message(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
 
     user = relationship("User")
+
+
+class PlatformConfig(Base):
+    """平台连接配置（安全修复 C4：管理端「连接数据分析PC」保存真正落库）
+
+    key/value 形式存储：host / port / username / workspace_dir / output_path。
+    读取时以环境变量（.env）为兜底；数据生成投递目录优先取库中 workspace_dir。
+    密码永不落库——测试连接时临时输入，仅用于当次 SSH 探测。
+    """
+    __tablename__ = "platform_config"
+    key = Column(String(64), primary_key=True)
+    value = Column(Text)
+    updated_by = Column(Integer, ForeignKey("users.id"))
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)

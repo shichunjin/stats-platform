@@ -1,6 +1,7 @@
 """认证模块：JWT 签发与校验、密码哈希、密码强度策略"""
 import base64
 import hashlib
+import hmac
 import os
 import re
 from datetime import datetime, timedelta
@@ -99,8 +100,10 @@ def verify_password(username: str, password: str, db_user: Optional[User] = None
     1. 先匹配演示账号（DEMO_USERS）
     2. 再校验数据库用户的 password_hash
     """
-    # 演示账号
-    if DEMO_USERS.get(username) == password:
+    # 演示账号（安全修复 C6：hmac.compare_digest 常量时间比较，防时序侧信道）
+    demo_pw = DEMO_USERS.get(username)
+    if demo_pw is not None and hmac.compare_digest(
+            demo_pw.encode("utf-8"), password.encode("utf-8")):
         return True
     # 数据库注册用户
     if db_user and db_user.password_hash:

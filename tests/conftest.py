@@ -21,6 +21,9 @@ os.environ["RATE_LIMIT_ENABLED"] = "false"
 # 强制置空，防止在服务器上跑测试时读到生产 .env 的真实 Guacamole 库连接串
 # （否则 guac_sync_enabled() 为真，A4「未启用同步 503」用例失效，且可能写入真实 guac 库）
 os.environ["GUAC_DB_URL"] = ""
+# 固定为非真实内网地址：C5 起 windows_sync_enabled 要求 sftp_host 非空，
+# 用例 monkeypatch 开启同步开关后即可生效；该地址不可路由，不会发起真实 SSH 连接
+os.environ["SFTP_HOST"] = "10.99.0.1"
 
 # ---- 创建测试引擎并 monkey-patch database 模块 ----
 TEST_ENGINE = create_engine(
@@ -40,6 +43,7 @@ settings.jwt_secret = "test-secret-key-for-unit-tests"
 settings.fileserver_root = os.environ["FILESERVER_ROOT"]
 settings.guac_db_url = ""
 settings.rate_limit_enabled = False
+settings.sftp_host = "10.99.0.1"
 # 固定原始数据基线为不存在的路径：相似度规则下"无基线"安全默认转人工审核，
 # 使既有用例的审批流程断言保持确定性（相似度专项用例自行 monkeypatch）
 settings.dataset_csv_path = os.path.join(

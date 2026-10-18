@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends, Query, HTTPException, Request
 from pydantic import BaseModel
 from sqlalchemy.orm import Session, joinedload
 from app.database import get_db
-from app.models import User, AuditLog, PendingFile, ExportResult, Scope
+from app.models import User, AuditLog, PendingFile, ExportResult, Scope, PlatformConfig
 from app.auth import get_current_user, require_admin
 from app.config import settings
 from app.rate_limit import get_client_ip
@@ -327,22 +327,129 @@ class PlatformTestRequest(BaseModel):
     password: str = ""
 
 
-def _is_allowed_test_host(host: str) -> bool:
+def _is_allowed_test_host(host: str, db: Session | None = None) -> bool:
     """安全修复 B3：限制测试连接目标，防止 SSRF。
 
     允许的目标：
     - 配置文件中已知的 SFTP/RDS 主机（settings.sftp_host / settings.rds_host）
+    - 平台配置库中保存的主机（C4 落库后的生效值）
     - 私有 IP 段（内网部署场景）
     - localhost / 127.0.0.1
     禁止：公网任意 IP（防止被用作跳板扫描/攻击第三方）。
     """
-    if host in (settings.sftp_host, settings.rds_host, "localhost", "127.0.0.1"):
+    known = {settings.sftp_host, settings.rds_host, "localhost", "127.0.0.1"}
+    if db is not None:
+        row = db.query(PlatformConfig).filter(PlatformConfig.key == "host").first()
+        if row and row.value:
+            known.add(row.value)
+    if host in known:
         return True
     try:
         ip = ipaddress.ip_address(host)
         return ip.is_private
     except ValueError:
         return False  # 域名解析结果不可控，禁止
+
+
+# ---- 平台连接配置（安全修复 C4：保存真正落库，数据投递目录即时生效） ----
+
+_PLATFORM_CONFIG_KEYS = ("host", "port", "username", "workspace_dir", "output_path")
+
+
+class PlatformConfigRequest(BaseModel):
+    """保存平台连接配置（密码不在此传输——永不落库，仅测试连接时临时输入）"""
+    host: str = ""
+    port: int = 22
+    username: str = ""
+    workspace_dir: str = ""
+    output_path: str = ""
+
+
+def get_workspace_root(db: Session) -> str:
+    """数据生成投递目录：平台配置库优先，环境变量兜底（供 data 生成任务调用）"""
+    row = db.query(PlatformConfig).filter(PlatformConfig.key == "workspace_dir").first()
+    if row and row.value:
+        return row.value
+    return settings.windows_workspace_dir
+
+
+@router.get("/platform-config", summary="读取平台连接配置（管理员）", description="""
+**读取「连接数据分析PC」页面的配置（仅管理员）**
+
+返回值优先级：平台配置库 > 环境变量（.env）。密码永不返回。
+""")
+def get_platform_config(
+    admin: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    stored = {r.key: r.value for r in db.query(PlatformConfig).all()}
+    return {
+        "host": stored.get("host") or settings.sftp_host,
+        "port": int(stored.get("port") or settings.sftp_port),
+        "username": stored.get("username") or settings.sftp_username,
+        "workspace_dir": stored.get("workspace_dir") or settings.windows_workspace_dir,
+        "output_path": stored.get("output_path") or settings.windows_data_dir,
+    }
+
+
+@router.put("/platform-config", summary="保存平台连接配置（管理员）", description="""
+**保存「连接数据分析PC」页面的配置到平台配置库（仅管理员）**
+
+- 保存后立即生效：数据生成投递目录优先取库中 `workspace_dir`
+- `host` 若不为空，必须在 B3 白名单内（已知主机或私有 IP），防止把投递目标改到公网
+- 密码不接受、不落库
+
+**错误码**
+- `400`：host 不在允许列表
+- `401`：未认证
+- `403`：非管理员
+""")
+def put_platform_config(
+    req: PlatformConfigRequest,
+    request: Request,
+    admin: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    client_ip = get_client_ip(request)
+    # 复用 B3 白名单：防止管理员误填/被诱导填写公网主机作为投递目标
+    if req.host and not _is_allowed_test_host(req.host):
+        db.add(AuditLog(
+            user_id=admin.id,
+            action="platform_config_save",
+            detail=f"平台配置保存被拒绝（主机不允许）: {req.host}",
+            status="failed",
+            ip_addr=client_ip,
+        ))
+        db.commit()
+        raise HTTPException(
+            status_code=400,
+            detail=f"主机 '{req.host}' 不在允许列表。仅支持配置文件中的 SFTP/RDS 主机或私有 IP。",
+        )
+
+    values = {
+        "host": req.host.strip(),
+        "port": str(req.port),
+        "username": req.username.strip(),
+        "workspace_dir": req.workspace_dir.strip(),
+        "output_path": req.output_path.strip(),
+    }
+    for key in _PLATFORM_CONFIG_KEYS:
+        row = db.query(PlatformConfig).filter(PlatformConfig.key == key).first()
+        if row is None:
+            db.add(PlatformConfig(key=key, value=values[key], updated_by=admin.id))
+        else:
+            row.value = values[key]
+            row.updated_by = admin.id
+
+    db.add(AuditLog(
+        user_id=admin.id,
+        action="platform_config_save",
+        detail=f"保存平台连接配置: host={values['host']}:{values['port']}, "
+               f"workspace_dir={values['workspace_dir']}, output_path={values['output_path']}",
+        ip_addr=client_ip,
+    ))
+    db.commit()
+    return {"success": True, "message": "配置已保存并生效"}
 
 
 @router.post("/platform/test", summary="测试连接数据分析PC", description="""
@@ -370,7 +477,7 @@ def test_platform_connection(
 ):
     client_ip = get_client_ip(request)
     # 安全修复 B3：SSRF 防护——限制可测试的目标主机
-    if not _is_allowed_test_host(req.host):
+    if not _is_allowed_test_host(req.host, db):
         db.add(AuditLog(
             user_id=admin.id,
             action="platform_test",

@@ -58,3 +58,20 @@ export function testPlatform(payload: {
 }) {
   return request.post<unknown, PlatformTestResult>('/admin/platform/test', payload)
 }
+
+// ---- 平台连接配置（安全修复 C4：保存落库，密码不传输/不落库） ----
+export interface PlatformConfig {
+  host: string
+  port: number
+  username: string
+  workspace_dir: string
+  output_path: string
+}
+
+export function getPlatformConfig() {
+  return request.get<unknown, PlatformConfig>('/admin/platform-config')
+}
+
+export function savePlatformConfig(payload: PlatformConfig) {
+  return request.put<unknown, { success: boolean; message: string }>('/admin/platform-config', payload)
+}

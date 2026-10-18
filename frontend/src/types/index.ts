@@ -75,7 +75,7 @@ export interface AuditLog {
 }
 
 // ---- 数据申请（前端模型） ----
-export type ApplyStatus = 'pending' | 'processing' | 'completed' | 'rejected'
+export type ApplyStatus = 'pending' | 'processing' | 'generating' | 'completed' | 'failed' | 'rejected'
 
 export interface DataApply {
   id: number

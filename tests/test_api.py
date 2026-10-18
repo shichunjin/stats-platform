@@ -811,3 +811,84 @@ class TestAdminAssignScopes:
             json={"dept_id": None, "scope_ids": []},
         )
         assert resp.status_code == 401
+
+
+# ============================================================
+# 测试：安全响应头（C4 CSP）
+# ============================================================
+
+class TestSecurityHeaders:
+    """安全修复 C4：CSP 等安全响应头作为 XSS 窃取令牌的纵深防御"""
+
+    def test_csp_header_present(self, client):
+        resp = client.get("/health")
+        assert resp.status_code == 200
+        csp = resp.headers.get("Content-Security-Policy", "")
+        assert "default-src 'self'" in csp
+        assert "frame-ancestors 'none'" in csp
+
+    def test_other_security_headers(self, client):
+        resp = client.get("/health")
+        assert resp.headers.get("X-Content-Type-Options") == "nosniff"
+        assert resp.headers.get("Referrer-Policy") == "same-origin"
+
+
+# ============================================================
+# 测试：平台连接配置落库（C4）
+# ============================================================
+
+class TestPlatformConfig:
+    """安全修复 C4：管理端「连接数据分析PC」保存真正落库，密码永不落库"""
+
+    def test_get_fallback_to_env(self, client, admin_headers):
+        """库中无配置时回退环境变量（.env）默认值"""
+        resp = client.get("/admin/platform-config", headers=admin_headers)
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["host"] == settings.sftp_host
+        assert data["workspace_dir"] == settings.windows_workspace_dir
+        assert data["output_path"] == settings.windows_data_dir
+        assert "password" not in data  # 密码永不返回
+
+    def test_put_persists_and_reads_back(self, client, admin_headers, db_session):
+        """保存落库后 GET 返回库中值（优先于环境变量），并写审计日志"""
+        resp = client.put("/admin/platform-config", headers=admin_headers, json={
+            "host": "10.99.0.1", "port": 2222, "username": "stats",
+            "workspace_dir": "D:/ws", "output_path": "D:/out",
+        })
+        assert resp.status_code == 200
+
+        data = client.get("/admin/platform-config", headers=admin_headers).json()
+        assert data["host"] == "10.99.0.1"
+        assert data["port"] == 2222
+        assert data["username"] == "stats"
+        assert data["workspace_dir"] == "D:/ws"
+        assert data["output_path"] == "D:/out"
+
+        logs = db_session.query(AuditLog).filter(
+            AuditLog.action == "platform_config_save").all()
+        assert len(logs) == 1
+        assert "D:/ws" in logs[0].detail
+
+    def test_put_rejects_public_host(self, client, admin_headers, db_session):
+        """host 必须在 B3 白名单内：公网 IP 拒绝并写失败审计
+        （注意：Python ipaddress 将 TEST-NET 文档段判为 private，须用真实公网地址）"""
+        resp = client.put("/admin/platform-config", headers=admin_headers, json={
+            "host": "8.8.8.8", "port": 22, "username": "",
+            "workspace_dir": "", "output_path": "",
+        })
+        assert resp.status_code == 400
+        logs = db_session.query(AuditLog).filter(
+            AuditLog.action == "platform_config_save",
+            AuditLog.status == "failed").all()
+        assert len(logs) == 1
+
+    def test_put_forbidden_for_normal_user(self, client, auth_headers):
+        assert client.put("/admin/platform-config", headers=auth_headers,
+                          json={"host": "", "port": 22, "username": "",
+                                "workspace_dir": "", "output_path": ""}
+                          ).status_code == 403
+
+    def test_get_forbidden_for_normal_user(self, client, auth_headers):
+        assert client.get("/admin/platform-config",
+                          headers=auth_headers).status_code == 403

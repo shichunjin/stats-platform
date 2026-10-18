@@ -29,6 +29,9 @@
           <el-tooltip v-if="row.status === 'rejected'" :content="row.reject_reason || '已驳回'">
             <el-button type="danger" link>驳回原因</el-button>
           </el-tooltip>
+          <el-tooltip v-if="row.status === 'failed'" :content="row.reject_reason || '生成失败'">
+            <el-button type="danger" link>失败原因</el-button>
+          </el-tooltip>
         </template>
       </el-table-column>
     </el-table>
@@ -57,13 +60,13 @@ onMounted(async () => {
 })
 
 function statusTag(s: string) {
-  return ({ pending: 'tag-pending', processing: 'tag-running', completed: 'tag-done', rejected: 'tag-reject' } as Record<string, string>)[s] || 'tag-pending'
+  return ({ pending: 'tag-pending', processing: 'tag-running', generating: 'tag-running', completed: 'tag-done', failed: 'tag-reject', rejected: 'tag-reject' } as Record<string, string>)[s] || 'tag-pending'
 }
 function statusDot(s: string) {
-  return ({ pending: 'pending', processing: 'running', completed: 'done', rejected: 'reject' } as Record<string, string>)[s] || 'pending'
+  return ({ pending: 'pending', processing: 'running', generating: 'running', completed: 'done', failed: 'reject', rejected: 'reject' } as Record<string, string>)[s] || 'pending'
 }
 function statusText(s: string) {
-  return ({ pending: '待审核', processing: '处理中', completed: '已完成', rejected: '已驳回' } as Record<string, string>)[s] || s
+  return ({ pending: '待审核', processing: '处理中', generating: '生成中', completed: '已完成', failed: '生成失败', rejected: '已驳回' } as Record<string, string>)[s] || s
 }
 function viewResult(row: DataApply) {
   router.push('/user/my-results')

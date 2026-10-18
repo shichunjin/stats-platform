@@ -7,6 +7,9 @@
 --   export_results   + expires_at
 --   audit_logs       + status
 --   新增表            dataset_meta / dataset_rows / data_applies / messages
+-- 安全修复 Phase 3（2026-10）：
+--   data_applies.status 扩展 generating | failed（C1 异步生成）
+--   新增表            platform_config（C4 平台连接配置落库，密码永不落库）
 -- 生产以应用启动时的 create_all + 幂等迁移为准（Alembic 规划于 Phase 4），
 -- 本文件供按 README 手工建库与结构审阅使用。
 -- ============================================================
@@ -133,7 +136,7 @@ CREATE TABLE data_applies (
     time_start   TIMESTAMPTZ,                     -- 时间范围起
     time_end     TIMESTAMPTZ,                     -- 时间范围止
     priority     VARCHAR(16) DEFAULT 'medium',    -- low | medium | high
-    status       VARCHAR(16) DEFAULT 'pending',   -- pending|processing|completed|rejected
+    status       VARCHAR(16) DEFAULT 'pending',   -- pending|processing|generating|completed|failed|rejected
     reject_reason TEXT,
     processed_by INTEGER REFERENCES users(id),
     finished_at  TIMESTAMPTZ,
@@ -153,6 +156,17 @@ CREATE TABLE messages (
     created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX idx_messages_user ON messages(user_id, is_read);
+
+-- 平台连接配置表（安全修复 C4：管理端「连接数据分析PC」保存落库）
+-- key/value 形式：host / port / username / workspace_dir / output_path；
+-- 读取以环境变量（.env）为兜底；数据生成投递目录优先取库中 workspace_dir。
+-- 密码永不落库——测试连接时临时输入，仅用于当次 SSH 探测。
+CREATE TABLE platform_config (
+    key        VARCHAR(64) PRIMARY KEY,
+    value      TEXT,
+    updated_by INTEGER REFERENCES users(id),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
 
 -- 初始化管理员
 INSERT INTO scopes (scope_code, scope_type, scope_name, data_path)

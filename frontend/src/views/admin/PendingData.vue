@@ -24,7 +24,9 @@
           <el-select v-model="statusFilter" placeholder="按状态筛选" clearable style="width: 130px">
             <el-option label="待审核" value="pending" />
             <el-option label="处理中" value="processing" />
+            <el-option label="生成中" value="generating" />
             <el-option label="已完成" value="completed" />
+            <el-option label="生成失败" value="failed" />
             <el-option label="已驳回" value="rejected" />
           </el-select>
         </div>
@@ -32,7 +34,7 @@
     </template>
 
     <el-table :data="pagedList" v-loading="loading" stripe @selection-change="onSelection" @sort-change="onSort">
-      <el-table-column type="selection" width="48" :selectable="(row) => row.status !== 'completed'" />
+      <el-table-column type="selection" width="48" :selectable="(row) => !['completed', 'generating'].includes(row.status)" />
       <el-table-column prop="id" label="申请ID" width="80" sortable="custom" />
       <el-table-column label="申请人" width="110">
         <template #default="{ row }">{{ row.display_name || row.username || `用户${row.target_user_id ?? '-'}` }}</template>
@@ -96,7 +98,8 @@
         <el-descriptions-item label="状态">
           <el-tag :type="statusType(detailRow.status)" size="small">{{ statusText(detailRow.status) }}</el-tag>
         </el-descriptions-item>
-        <el-descriptions-item v-if="detailRow.status === 'rejected'" label="驳回原因">
+        <el-descriptions-item v-if="['rejected', 'failed'].includes(detailRow.status)"
+                              :label="detailRow.status === 'failed' ? '失败原因' : '驳回原因'">
           {{ detailRow.reject_reason || '-' }}
         </el-descriptions-item>
         <el-descriptions-item label="申请时间">{{ detailRow.apply_time }}</el-descriptions-item>
@@ -297,11 +300,11 @@ async function confirmBatchReject() {
 }
 
 const statusTag = (s: string) =>
-  ({ pending: 'tag-pending', processing: 'tag-running', completed: 'tag-done', rejected: 'tag-reject' } as Record<string, string>)[s] || 'tag-pending'
+  ({ pending: 'tag-pending', processing: 'tag-running', generating: 'tag-running', completed: 'tag-done', failed: 'tag-reject', rejected: 'tag-reject' } as Record<string, string>)[s] || 'tag-pending'
 const statusDot = (s: string) =>
-  ({ pending: 'pending', processing: 'running', completed: 'done', rejected: 'reject' } as Record<string, string>)[s] || 'pending'
+  ({ pending: 'pending', processing: 'running', generating: 'running', completed: 'done', failed: 'reject', rejected: 'reject' } as Record<string, string>)[s] || 'pending'
 const statusText = (s: string) =>
-  ({ pending: '待审核', processing: '处理中', completed: '已完成', rejected: '已驳回' } as Record<string, string>)[s] || s
+  ({ pending: '待审核', processing: '处理中', generating: '生成中', completed: '已完成', failed: '生成失败', rejected: '已驳回' } as Record<string, string>)[s] || s
 const priorityTag = (p: string) =>
   ({ low: 'tag-expired', medium: 'tag-pending', high: 'tag-reject' } as Record<string, string>)[p] || 'tag-expired'
 const priorityText = (p: string) => ({ low: '低', medium: '中', high: '高' } as Record<string, string>)[p] || p

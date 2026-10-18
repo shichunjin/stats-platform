@@ -18,6 +18,7 @@ from app.dataset import (
 )
 from app.transfer import upload_file_to_windows
 from app.schemas import FilteredDataGenerateRequest
+from app.routers.admin import get_workspace_root
 
 router = APIRouter(prefix="/data", tags=["数据"])
 
@@ -284,7 +285,8 @@ def _run_generate_job(*, apply_id, admin_id, target_id, filename, out_path,
             )
 
         # 2. 推送到目标用户的 Windows 个人工作区（W: 盘根目录），投递后锁定为本人私有
-        remote_dir = f"{settings.windows_workspace_dir}/{target.username}"
+        # 安全修复 C4：投递根目录优先取平台配置库（管理端「连接数据分析PC」保存），环境变量兜底
+        remote_dir = f"{get_workspace_root(db)}/{target.username}"
         win_path = upload_file_to_windows(
             out_path, remote_dir=remote_dir, remote_name=filename,
             lock_owner=target.username,

@@ -23,7 +23,7 @@
     <el-form ref="formRef" :model="form" :rules="rules" label-width="120px" style="max-width: 640px">
       <div class="section-title">连接信息</div>
       <el-form-item label="PC地址" prop="host">
-        <el-input v-model="form.host" placeholder="如 8.133.223.251" />
+        <el-input v-model="form.host" placeholder="Windows 数据分析主机地址（IP 或主机名）" />
       </el-form-item>
       <el-form-item label="端口" prop="port">
         <el-input-number v-model="form.port" :min="1" :max="65535" style="width: 100%" />
@@ -46,7 +46,7 @@
 
       <el-form-item>
         <el-button type="primary" :loading="testing" @click="test">测试连接</el-button>
-        <el-button type="success" @click="save">保存配置</el-button>
+        <el-button type="success" :loading="saving" @click="save">保存配置</el-button>
       </el-form-item>
     </el-form>
   </el-card>
@@ -55,13 +55,12 @@
 <script setup lang="ts">
 import { onMounted, reactive, ref } from 'vue'
 import { ElMessage, type FormInstance, type FormRules } from 'element-plus'
-import { testPlatform } from '@/api/admin'
+import { testPlatform, getPlatformConfig, savePlatformConfig } from '@/api/admin'
 import type { PlatformConfig } from '@/types'
-
-const STORAGE_KEY = 'platform_config'
 
 const formRef = ref<FormInstance>()
 const testing = ref(false)
+const saving = ref(false)
 
 // 连接状态：idle 未测 / connecting 连接中 / connected 已连接 / failed 连接失败
 const connState = ref<'idle' | 'connecting' | 'connected' | 'failed'>('idle')
@@ -69,7 +68,7 @@ const connError = ref('')
 const connStateText = ref('')
 
 const form = reactive<PlatformConfig>({
-  host: '8.133.223.251',
+  host: '',
   port: 22,
   username: 'Administrator',
   password: '',
@@ -84,16 +83,13 @@ const rules: FormRules = {
   password: [{ required: true, message: '请输入密码', trigger: 'blur' }],
 }
 
-onMounted(() => {
-  // 恢复本地保存的配置（密码不回显）
+onMounted(async () => {
+  // 安全修复 C4：配置从后端平台配置库读取（库 > 环境变量兜底），密码永不返回
   try {
-    const saved = localStorage.getItem(STORAGE_KEY)
-    if (saved) {
-      const cfg = JSON.parse(saved) as Partial<PlatformConfig>
-      Object.assign(form, cfg, { password: '' })
-    }
+    const cfg = await getPlatformConfig()
+    Object.assign(form, cfg, { password: '' })
   } catch {
-    /* 忽略损坏的本地配置 */
+    /* 拦截器处理 */
   }
 })
 
@@ -124,10 +120,24 @@ async function test() {
   }
 }
 
-function save() {
-  ElMessage.success('配置已保存（本地）')
-  // 密码不落本地；测试连接时单独输入
-  localStorage.setItem(STORAGE_KEY, JSON.stringify({ ...form, password: '' }))
+// 保存配置：落库到后端平台配置表（安全修复 C4），保存即生效；
+// 密码不传输、不落库——仅测试连接时临时使用
+async function save() {
+  saving.value = true
+  try {
+    const res = await savePlatformConfig({
+      host: form.host,
+      port: form.port,
+      username: form.username,
+      workspace_dir: form.workspace_dir,
+      output_path: form.output_path,
+    })
+    ElMessage.success(res.message || '配置已保存并生效（已写入后端）')
+  } catch {
+    /* 拦截器处理 */
+  } finally {
+    saving.value = false
+  }
 }
 </script>
 

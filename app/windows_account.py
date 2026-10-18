@@ -93,11 +93,14 @@ $secure = ConvertTo-SecureString $password -AsPlainText -Force
 $existing = Get-LocalUser -Name $username -ErrorAction SilentlyContinue
 if ($null -eq $existing) {
     New-LocalUser -Name $username -Password $secure -FullName $username `
-        -Description 'stats-platform' -AccountNeverExpires -PasswordNeverExpires `
+        -Description 'stats-platform' -AccountNeverExpires `
+        -PasswordNeverExpires:${password_never_expires} `
         -ErrorAction Stop | Out-Null
     Write-Output 'STATS_WINDOWS_USER_CREATED'
 } else {
     Set-LocalUser -Name $username -Password $secure -ErrorAction Stop
+    # 安全修复 C6：既有账号同步密码过期策略（默认遵循 Windows 密码过期，不再强制永不过期）
+    Set-LocalUser -Name $username -PasswordNeverExpires:${password_never_expires} -ErrorAction Stop
     Write-Output 'STATS_WINDOWS_USER_UPDATED'
 }
 
@@ -170,6 +173,10 @@ def _build_account_script(username: str, password: str) -> str:
             password=_ps_quote(password),
             sid_users=_SID_USERS,
             sid_rdp=_SID_REMOTE_DESKTOP_USERS,
+            # 安全修复 C6：密码过期策略可配置，默认遵循 Windows 默认（会过期）
+            password_never_expires=(
+                "$true" if settings.windows_password_never_expires else "$false"
+            ),
         )
         + "\n"
         + workspace
@@ -229,7 +236,9 @@ def _run_remote_ps(inner_script: str, action: str, username: str) -> None:
 
 
 def windows_sync_enabled() -> bool:
-    return bool(settings.windows_account_sync)
+    # 安全修复 C5：仓库默认不再内置主机 IP；未配置 sftp_host 时同步视为关闭，
+    # 避免向空地址发起 SSH 连接
+    return bool(settings.windows_account_sync and settings.sftp_host)
 
 
 def sync_windows_user(username: str, password: str) -> bool:

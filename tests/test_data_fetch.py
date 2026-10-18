@@ -292,3 +292,34 @@ def test_generate_inflight_conflict_409(client, admin_headers, db_session,
         "apply_id": apply_obj.id,
     })
     assert resp.status_code == 409
+
+
+# ---- 平台配置落库消费（C4） ----
+
+def test_generate_uses_platform_config_workspace_dir(client, admin_headers,
+                                                     db_session, test_scope,
+                                                     monkeypatch):
+    """C4：投递根目录优先取平台配置库中的 workspace_dir（管理端保存即生效）"""
+    uploaded = []
+    _patch_filtered_generator(monkeypatch)
+    _patch_upload(monkeypatch, uploaded)
+    target, _ = _make_user(db_session, test_scope, "gen_cfg")
+    apply_obj = _create_apply(db_session, target.id, status="pending")
+
+    # 管理端「连接数据分析PC」保存：workspace_dir 落库（host 置空跳过白名单校验）
+    resp = client.put("/admin/platform-config", headers=admin_headers, json={
+        "host": "", "port": 22, "username": "",
+        "workspace_dir": "D:/cfg_workspace", "output_path": "",
+    })
+    assert resp.status_code == 200, resp.text
+
+    resp = client.post("/data/generate", headers=admin_headers, json={
+        "target_user_id": target.id,
+        "filters": {"sex33": 1},
+        "filename": "subset.xlsx",
+        "apply_id": apply_obj.id,
+    })
+    assert resp.status_code == 200, resp.text
+
+    _local, remote_dir, _name, _lock = uploaded[-1]
+    assert remote_dir == "D:/cfg_workspace/gen_cfg"

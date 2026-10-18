@@ -51,7 +51,9 @@ class Settings(BaseSettings):
     generate_timeout_seconds: int = 600
 
     # ---- Windows 云主机 SFTP 推送（生成的 Excel 推送到 Windows C:\StatsData） ----
-    sftp_host: str = "8.133.223.251"
+    # 安全修复 C5：仓库不再内置真实主机 IP，必须通过环境变量/.env 配置；
+    # 留空时 Windows 账号同步自动视为关闭（windows_sync_enabled 会检查主机非空）
+    sftp_host: str = ""
     sftp_port: int = 22
     sftp_username: str = "Administrator"
     # 私钥路径（Linux 服务器上，免密登录；~ 会自动展开）
@@ -65,13 +67,18 @@ class Settings(BaseSettings):
     windows_pending_dir: str = "C:/pending"
 
     # 注册/改密时是否经 SSH 在 Windows 云主机同步创建/更新同名本地账号
-    # （复用 SFTP 的主机与免密私钥；本地开发可设 WINDOWS_ACCOUNT_SYNC=false 关闭）
+    # （复用 SFTP 的主机与免密私钥；本地开发可设 WINDOWS_ACCOUNT_SYNC=false 关闭；
+    # sftp_host 未配置时无论开关都视为关闭——安全修复 C5）
     windows_account_sync: bool = True
+    # Windows 本地账号密码策略（安全修复 C6）：False=遵循 Windows 默认密码过期策略（42 天），
+    # True=密码永不过期（便利性优先，需运维确认符合组织密码策略后再开启）
+    windows_password_never_expires: bool = False
 
     # 远程桌面
-    rds_host: str = "8.133.223.251"
+    # 安全修复 C5：仓库不再内置真实主机 IP/域名，必须通过环境变量/.env 配置
+    rds_host: str = ""
     rds_port: int = 3389
-    guacamole_url: str = "https://guac.chunjindevelop68.xyz/guacamole/#/client/"
+    guacamole_url: str = "https://guac.example.com/guacamole/#/client/"
     # 已废弃（安全修复 A4）：共享 RDP 连接 ID 的回退已移除——未启用 GUAC_DB_URL
     # 时 /session/connect 直接 503，不再回退到共享连接（会话串号风险）。
     # 字段仅为兼容旧 .env 保留，不再被读取。
@@ -94,8 +101,9 @@ class Settings(BaseSettings):
     guac_rdp_domain: str = ""
     # RDP 安全层：nla / tls / rdp；留空让 guacd 自动协商
     guac_rdp_security: str = "nla"
-    # 忽略 RDP 证书错误（自签证书/按 IP 直连环境建议开启）
-    guac_rdp_ignore_cert: bool = True
+    # 忽略 RDP 证书错误（安全修复 C7：默认关闭——生产应使用有效证书 + NLA；
+    # 自签证书/按 IP 直连等兼容场景需显式设 GUAC_RDP_IGNORE_CERT=true）
+    guac_rdp_ignore_cert: bool = False
     # guacd 容器内 RDP 虚拟盘根目录，按用户名建子目录隔离浏览器传文件；留空不启用
     guac_drive_root: str = ""
     # guacd 容器内会话录像根目录，按用户名建子目录隔离；留空不录像

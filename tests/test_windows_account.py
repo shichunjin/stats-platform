@@ -356,3 +356,27 @@ def test_change_password_syncs_to_windows(client, db_session, monkeypatch):
     again = client.post("/auth/login",
                         json={"username": "pwdwin", "password": "Newpass2"})
     assert again.status_code == 200
+
+
+# ---- 安全修复 C6/C5：密码过期策略与主机守卫 ----
+
+def test_account_script_password_expires_by_default():
+    """C6：默认遵循 Windows 密码过期策略（不再强制永不过期）"""
+    script = wa._build_account_script("poluser", "Passw0rd!")
+    assert "-PasswordNeverExpires:$false" in script
+
+
+def test_account_script_password_never_expires_opt_in(monkeypatch):
+    """C6：显式开启 WINDOWS_PASSWORD_NEVER_EXPIRES 后脚本置 $true"""
+    monkeypatch.setattr(settings, "windows_password_never_expires", True)
+    script = wa._build_account_script("poluser", "Passw0rd!")
+    assert "-PasswordNeverExpires:$true" in script
+
+
+def test_sync_disabled_when_host_empty(monkeypatch):
+    """C5：未配置 sftp_host 时同步视为关闭，避免向空地址发起 SSH"""
+    monkeypatch.setattr(settings, "windows_account_sync", True)
+    monkeypatch.setattr(settings, "sftp_host", "")
+    assert wa.windows_sync_enabled() is False
+    monkeypatch.setattr(settings, "sftp_host", "10.99.0.1")
+    assert wa.windows_sync_enabled() is True
