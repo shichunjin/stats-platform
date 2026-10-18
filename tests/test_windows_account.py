@@ -338,6 +338,13 @@ def test_change_password_syncs_to_windows(client, db_session, monkeypatch):
     assert "$password = 'Newpass2'" in inner
     assert "Oldpass1" not in inner
 
+    # 安全修复 B2：改密后旧 JWT 立即失效（password_version 递增），
+    # 后续请求必须用新密码重新登录取新 token
+    relogin = client.post("/auth/login",
+                          json={"username": "pwdwin", "password": "Newpass2"})
+    assert relogin.status_code == 200
+    headers = {"Authorization": f"Bearer {relogin.json()['access_token']}"}
+
     # Windows 失败时平台密码必须保持不变（新密码本身合规，失败来自远端）
     fake.exit_code = 1
     fake.err = "密码不满足复杂性要求"
