@@ -30,6 +30,39 @@ class TestHealthCheck:
         assert '<div id="app">' in resp.text
 
 
+class TestProdAttackSurface:
+    """安全修复 B11/B12：默认（prod）环境下的攻击面收敛。
+
+    测试环境未设 APP_ENV，settings.app_env 默认 prod，与生产行为一致。
+    """
+
+    def test_docs_disabled(self, client):
+        """B11：/docs 不得暴露（含 SPA 回退兜底 404）"""
+        assert client.get("/docs").status_code == 404
+
+    def test_redoc_disabled(self, client):
+        assert client.get("/redoc").status_code == 404
+
+    def test_openapi_disabled(self, client):
+        assert client.get("/openapi.json").status_code == 404
+
+    def test_cors_excludes_localhost(self, client):
+        """B12：生产 CORS 预检不回 echo localhost 来源"""
+        resp = client.options("/auth/login", headers={
+            "Origin": "http://localhost:5173",
+            "Access-Control-Request-Method": "POST",
+        })
+        assert resp.headers.get("access-control-allow-origin") != "http://localhost:5173"
+
+    def test_cors_allows_prod_domain(self, client):
+        """B12：正式域名预检正常放行"""
+        resp = client.options("/auth/login", headers={
+            "Origin": "https://chunjindevelop68.xyz",
+            "Access-Control-Request-Method": "POST",
+        })
+        assert resp.headers.get("access-control-allow-origin") == "https://chunjindevelop68.xyz"
+
+
 # ============================================================
 # 测试：认证路由 /auth
 # ============================================================

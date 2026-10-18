@@ -7,6 +7,12 @@ from pydantic_settings import BaseSettings
 
 
 class Settings(BaseSettings):
+    # 运行环境：prod（默认）| dev（本地开发）
+    # prod：关闭 /docs /redoc /openapi.json（B11），CORS 白名单不含 localhost（B12）；
+    # dev：开启 API 文档，CORS 追加 http://localhost:5173 / http://127.0.0.1:5173。
+    # 通过环境变量 APP_ENV=dev 或 .env 中 APP_ENV=dev 切换。
+    app_env: str = "prod"
+
     # 数据库连接串（含密码，必须通过环境变量 DATABASE_URL 提供）
     database_url: str
 
@@ -70,8 +76,12 @@ class Settings(BaseSettings):
     # ---- 一人一专属 RDP 连接（启用 GUAC_DB_URL 时生效） ----
     # 专属连接名前缀，完整连接名 = 前缀 + 用户名
     guac_connection_prefix: str = "windows-"
-    # 是否把账号密码写入连接参数实现 RDP 自动登录（要求 Windows 账号与平台账号同名同密码）
-    guac_rdp_auto_login: bool = True
+    # 是否把账号密码写入连接参数实现 RDP 自动登录（要求 Windows 账号与平台账号同名同密码）。
+    # 安全修复 B13：默认 False——guacamole-auth-jdbc 以明文存储连接密码，库泄露即
+    # Windows 凭据泄露；关闭后用户在 Windows 登录界面手工输入一次凭据（与平台同密码）。
+    # 连接参数每次同步全量重写，关闭后存量明文密码随下次同步/连接自动清除。
+    # 如确认库仅监听 127.0.0.1 且接受该风险，可设 GUAC_RDP_AUTO_LOGIN=true 恢复一键直连。
+    guac_rdp_auto_login: bool = False
     # Windows 域名（工作组环境留空）
     guac_rdp_domain: str = ""
     # RDP 安全层：nla / tls / rdp；留空让 guacd 自动协商

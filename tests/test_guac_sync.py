@@ -19,6 +19,22 @@ from app.auth import verify_password_hash
 from app.guac import ensure_user_connection, get_user_connection_id
 from app.models import User
 
+
+@pytest.fixture(autouse=True)
+def _enable_auto_login(monkeypatch):
+    """本模块多数用例验证「自动登录开启」时的同步写入行为；
+    安全修复 B13 后生产默认值为 False（见 test_auto_login_defaults_off），
+    这里显式开启。test_auto_login_disabled_omits_credentials 自行改回 False。"""
+    monkeypatch.setattr(settings, "guac_rdp_auto_login", True)
+
+
+def test_auto_login_defaults_off():
+    """安全修复 B13：guac_rdp_auto_login 生产默认值必须为 False——
+    不将明文 RDP 密码写入连接参数（库泄露即 Windows 凭据泄露）。
+    断言字段声明默认值，不受环境变量 / .env 影响。"""
+    from app.config import Settings
+    assert Settings.model_fields["guac_rdp_auto_login"].default is False
+
 # guacamole-auth-jdbc schema 最小子集
 _GUAC_SCHEMA = """
 CREATE TABLE guacamole_entity (

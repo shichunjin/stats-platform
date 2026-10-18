@@ -1,7 +1,7 @@
 """FastAPI 入口 — 统计软件托管平台"""
 import logging
 import os
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, RedirectResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
@@ -9,10 +9,16 @@ from app.routers import auth, session, results, admin, data, messages, applies
 from app.database import Base, engine, SessionLocal
 from app.models import User, Scope, AuditLog
 from app.auth import DEMO_ACCOUNTS, DEMO_USERS
+from app.config import settings
 from app.guac import guac_sync_enabled, upsert_guac_user
 from app.windows_account import windows_sync_enabled, sync_windows_user
 
 logger = logging.getLogger("stats-platform")
+
+# 安全修复 B11/B12：按运行环境拆分攻击面
+# prod（默认）：/docs /redoc /openapi.json 关闭、CORS 仅含生产域名；
+# dev（APP_ENV=dev）：开放 API 文档、CORS 追加本地前端开发地址。
+_IS_PROD = settings.app_env.strip().lower() == "prod"
 
 # 创建数据库表（生产环境建议用 Alembic 迁移）
 Base.metadata.create_all(bind=engine)
@@ -139,17 +145,28 @@ app = FastAPI(
         {"name": "结果", "description": "分析结果审查与下载接口"},
         {"name": "管理员", "description": "管理员专属接口（需管理员权限）"},
     ],
+    # 安全修复 B11：生产环境关闭公开 API 文档（完整攻击面清单不对未认证用户暴露）
+    docs_url=None if _IS_PROD else "/docs",
+    redoc_url=None if _IS_PROD else "/redoc",
+    openapi_url=None if _IS_PROD else "/openapi.json",
 )
+
+# 安全修复 B12：CORS 按环境拆分——生产仅允许已配置 DNS 的正式域名，
+# 本地开发地址（Vite 5173）仅在 APP_ENV=dev 时追加，防止恶意本地页面跨域调用。
+_cors_origins = [
+    "https://chunjindevelop68.xyz",
+    "https://www.chunjindevelop68.xyz",
+    "https://guac.chunjindevelop68.xyz",
+]
+if not _IS_PROD:
+    _cors_origins += [
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+    ]
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "https://chunjindevelop68.xyz",
-        "https://www.chunjindevelop68.xyz",
-        "https://guac.chunjindevelop68.xyz",
-        "http://localhost:5173",
-        "http://127.0.0.1:5173",
-    ],
+    allow_origins=_cors_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -200,6 +217,10 @@ if os.path.isfile(_SPA_INDEX):
     @app.get("/{full_path:path}", response_class=HTMLResponse, include_in_schema=False)
     def spa_entry(full_path: str):
         """前端路由（history 模式）统一回退到 index.html；已注册 API 路由优先匹配，不会进入这里。"""
+        # 安全修复 B11：docs/redoc/openapi 在生产已关闭，落入 SPA 回退时必须 404
+        # （开发环境下这些路径由 FastAPI 内置路由优先匹配，不会走到这里）。
+        if full_path == "openapi.json" or full_path.split("/")[0] in ("docs", "redoc"):
+            raise HTTPException(status_code=404)
         # dist 根目录下的真实文件（favicon.ico 等）直接返回
         if full_path:
             candidate = os.path.realpath(os.path.join(_FRONTEND_DIST, full_path))

@@ -252,5 +252,6 @@ def generate_filtered(
         "columns": columns,
         "target_user": target.display_name or target.username,
         "windows_path": win_path,
-        "local_path": out_path,
+        # 安全修复 B14：不再返回服务器本地绝对路径（local_path），
+        # 避免向客户端泄露后端磁盘布局；生成文件按 target.id 分目录隔离存放。
     }
