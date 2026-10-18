@@ -1,6 +1,7 @@
 """管理员路由: 审计日志 / 待审查文件 / 用户与数据权限管理 / 导出审核"""
 import os
 import shutil
+import ipaddress
 from fastapi import APIRouter, Depends, Query, HTTPException
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
@@ -264,6 +265,24 @@ class PlatformTestRequest(BaseModel):
     password: str = ""
 
 
+def _is_allowed_test_host(host: str) -> bool:
+    """安全修复 B3：限制测试连接目标，防止 SSRF。
+
+    允许的目标：
+    - 配置文件中已知的 SFTP/RDS 主机（settings.sftp_host / settings.rds_host）
+    - 私有 IP 段（内网部署场景）
+    - localhost / 127.0.0.1
+    禁止：公网任意 IP（防止被用作跳板扫描/攻击第三方）。
+    """
+    if host in (settings.sftp_host, settings.rds_host, "localhost", "127.0.0.1"):
+        return True
+    try:
+        ip = ipaddress.ip_address(host)
+        return ip.is_private
+    except ValueError:
+        return False  # 域名解析结果不可控，禁止
+
+
 @router.post("/platform/test", summary="测试连接数据分析PC", description="""
 **测试与数据分析PC（Windows）的 SSH/SFTP 连通性（仅管理员）**
 
@@ -271,7 +290,12 @@ class PlatformTestRequest(BaseModel):
 - 尝试建立 SSH 连接并认证
 - 成功返回耗时；失败返回具体错误信息（网络不通 / 认证失败等）
 
+**安全限制（B3 修复）**
+- 目标主机必须是配置文件中已知的 SFTP/RDS 主机，或私有 IP 段
+- 禁止对公网任意 IP 发起连接，防止 SSRF/跳板攻击
+
 **错误码**
+- `400`：目标主机不在允许列表
 - `401`：未认证
 - `403`：非管理员
 - `502`：连接失败（detail 为具体原因）
@@ -281,6 +305,20 @@ def test_platform_connection(
     admin: User = Depends(require_admin),
     db: Session = Depends(get_db),
 ):
+    # 安全修复 B3：SSRF 防护——限制可测试的目标主机
+    if not _is_allowed_test_host(req.host):
+        db.add(AuditLog(
+            user_id=admin.id,
+            action="platform_test",
+            detail=f"测试连接被拒绝（目标不允许）: {req.host}:{req.port}",
+            status="failed",
+        ))
+        db.commit()
+        raise HTTPException(
+            status_code=400,
+            detail=f"目标主机 '{req.host}' 不在允许列表。仅支持配置文件中的 SFTP/RDS 主机或私有 IP。",
+        )
+
     import time
     import paramiko
     import socket

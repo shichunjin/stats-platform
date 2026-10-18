@@ -35,10 +35,30 @@ def import_dataset(
     db: Session = Depends(get_db),
 ):
     path = csv_path or settings.dataset_csv_path
-    if not os.path.exists(path):
+
+    # 安全修复 B4：限制可导入的路径，防止本地文件读取（LFI）
+    # 允许的路径：1) 配置文件中的 dataset_csv_path；2) fileserver_root 下的 csv 文件
+    allowed_base = os.path.realpath(settings.dataset_csv_path)
+    allowed_root = os.path.realpath(settings.fileserver_root)
+    resolved = os.path.realpath(path)
+
+    if resolved != allowed_base and not resolved.startswith(allowed_root + os.sep):
+        db.add(AuditLog(
+            user_id=admin.id,
+            action="dataset_import",
+            detail=f"导入被拒绝（路径不允许）: {path}",
+            status="failed",
+        ))
+        db.commit()
+        raise HTTPException(
+            status_code=400,
+            detail="导入路径不允许。仅支持配置文件指定的数据集路径或 fileserver_root 下的 CSV 文件。",
+        )
+
+    if not os.path.exists(resolved):
         raise HTTPException(status_code=404, detail=f"CSV 文件不存在: {path}")
 
-    meta = import_csv_to_db(path, db, name=settings.dataset_name)
+    meta = import_csv_to_db(resolved, db, name=settings.dataset_name)
 
     db.add(AuditLog(
         user_id=admin.id,
@@ -139,7 +159,16 @@ def generate_filtered(
         )
 
     # 文件名：前端指定或按时间戳自动生成
+    # 安全修复 B5：规范化文件名，防止路径穿越（如 ../../etc/passwd）
+    import re
     filename = payload.filename or timestamp_filename(settings.dataset_name)
+    # 仅保留安全字符：字母/数字/下划线/连字符/点/中文，拒绝路径分隔符
+    filename = re.sub(r'[^\w\-.一-龥]', '_', filename)
+    # 去掉开头的点（防隐藏文件/目录穿越）和连续点
+    filename = re.sub(r'^\.+', '', filename)
+    filename = re.sub(r'\.{2,}', '.', filename)
+    if not filename:
+        filename = timestamp_filename(settings.dataset_name)
     if not filename.lower().endswith(".xlsx"):
         filename += ".xlsx"
 
