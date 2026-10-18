@@ -279,9 +279,21 @@ if ($Software -and $SoftwareConfigs.ContainsKey($Software.ToLower())) {
     }
 }
 
+# ============================================================
+# 7. Restart Explorer to clear W: drive state cache
+# ============================================================
+# Explorer 在登录时可能缓存 W: 的旧状态（目录/ACL 未就绪时的失败状态），
+# 导致后续即使路径可用也拒绝访问。脚本最后重启 Explorer 强制刷新。
+# 仅普通用户执行（管理员登录时重启 explorer 会干扰服务器管理）。
+if (-not $IsAdmin) {
+    Stop-Process -Name explorer -Force -ErrorAction SilentlyContinue
+    Start-Sleep -Milliseconds 500
+    Start-Process explorer.exe
+}
+
 Write-Host "========================================"
 Write-Host "User $Username login environment initialized"
-Write-Host "  Z: (public dataset, read-only) = \\127.0.0.1\StatsData"
-Write-Host "  W: (workspace, private)        = $UserWorkspace"
+Write-Host "  Z: (public dataset, read-only) = \\127.0.0.1\StatsData
+  W: (workspace, private)        = $UserWorkspace"
 Write-Host "  Result output directory        = $UserPending"
 Write-Host "========================================"
