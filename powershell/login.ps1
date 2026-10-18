@@ -252,7 +252,13 @@ $shortcut.Description = "打开我的数据工作目录 (W:)"
 $shortcut.Save()
 
 # Desktop shortcut to the user's own pending dir —— 只有放进这里的结果才能在平台申请导出
+# 目录缺失时自动创建（后端会在连接时幂等补建；此处兜底确保快捷方式始终可见），
+# 建好后立即锁定为本人私有 ACL
+if (-not (Test-Path $UserPending)) {
+    try { New-Item -ItemType Directory -Path $UserPending -Force | Out-Null } catch { }
+}
 if (Test-Path $UserPending) {
+    Lock-PrivateFolder $UserPending
     $lnkPath = "$Desktop\待导出目录.lnk"
     $shortcut = $Shell.CreateShortcut($lnkPath)
     $shortcut.TargetPath = "$env:SystemRoot\explorer.exe"
