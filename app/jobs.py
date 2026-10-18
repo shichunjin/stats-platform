@@ -21,8 +21,10 @@ _lock = threading.Lock()
 def submit_generate(apply_id: int, fn, **kwargs) -> bool:
     """提交生成任务；同一申请已有任务在跑时返回 False（防并发双击/重试风暴）。
 
-    fn 在后台线程执行，必须自行管理数据库会话生命周期（生产环境
-    请求会话随响应关闭，后台线程不得复用）。
+    fn 在后台线程执行并以 apply_id 关键字参数接收申请 ID（调用方无需在
+    kwargs 中重复传递，否则会造成「multiple values for argument」冲突），
+    且必须自行管理数据库会话生命周期（生产环境请求会话随响应关闭，
+    后台线程不得复用）。
     """
     with _lock:
         if apply_id in _inflight:
@@ -31,7 +33,7 @@ def submit_generate(apply_id: int, fn, **kwargs) -> bool:
 
     def _runner():
         try:
-            fn(**kwargs)
+            fn(apply_id=apply_id, **kwargs)
         except Exception:  # noqa: BLE001 — 兜底，任务内部已处理业务异常
             logger.exception("后台生成任务未捕获异常 apply_id=%s", apply_id)
         finally:

@@ -226,10 +226,10 @@ def generate_filtered(
     ))
     db.commit()
 
+    # apply_id 由执行器注入任务函数，kwargs 中不得重复传递
     if not jobs.submit_generate(
         apply_obj.id,
         _run_generate_job,
-        apply_id=apply_obj.id,
         admin_id=admin.id,
         target_id=target.id,
         filename=filename,

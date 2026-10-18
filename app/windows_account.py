@@ -94,13 +94,13 @@ $existing = Get-LocalUser -Name $username -ErrorAction SilentlyContinue
 if ($null -eq $existing) {
     New-LocalUser -Name $username -Password $secure -FullName $username `
         -Description 'stats-platform' -AccountNeverExpires `
-        -PasswordNeverExpires:${password_never_expires} `
+        -PasswordNeverExpires:{password_never_expires} `
         -ErrorAction Stop | Out-Null
     Write-Output 'STATS_WINDOWS_USER_CREATED'
 } else {
     Set-LocalUser -Name $username -Password $secure -ErrorAction Stop
     # 安全修复 C6：既有账号同步密码过期策略（默认遵循 Windows 密码过期，不再强制永不过期）
-    Set-LocalUser -Name $username -PasswordNeverExpires:${password_never_expires} -ErrorAction Stop
+    Set-LocalUser -Name $username -PasswordNeverExpires:{password_never_expires} -ErrorAction Stop
     Write-Output 'STATS_WINDOWS_USER_UPDATED'
 }
 

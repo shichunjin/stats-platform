@@ -23,9 +23,10 @@ from app.models import User, DataApply
 @pytest.fixture(autouse=True)
 def _inline_jobs(monkeypatch, db_session):
     """性能修复 C1：生成已异步化。测试内联执行后台任务，
-    并注入用例同一会话（保持 SAVEPOINT 隔离，不跨连接）。"""
+    并注入用例同一会话（保持 SAVEPOINT 隔离，不跨连接）。
+    apply_id 由执行器注入任务函数（与 jobs.submit_generate 行为一致）。"""
     def _inline(apply_id, fn, **kwargs):
-        fn(session=db_session, **kwargs)
+        fn(apply_id=apply_id, session=db_session, **kwargs)
         return True
 
     monkeypatch.setattr(jobs, "submit_generate", _inline)
