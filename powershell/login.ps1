@@ -97,58 +97,53 @@ Lock-PrivateFolder $UserWorkspace
 Lock-PrivateFolder $UserPending
 
 # ============================================================
-# 3. 生成物落点强制：文件夹重定向 + 隐藏 C: 盘（普通用户；管理员豁免）
+# 3. 桌面/文档/下载 归位本地默认（普通用户；管理员豁免）
 # ============================================================
-if (-not $IsAdmin -and (Test-Path $WDrive)) {
-    # 3.1 桌面/文档/下载的物理位置改到 W: 私有工作区下
-    $RedirDesktop   = "W:\Desktop"
-    $RedirDocuments = "W:\Documents"
-    $RedirDownloads = "W:\Downloads"
-    foreach ($p in @($RedirDesktop, $RedirDocuments, $RedirDownloads)) {
+# 需求变更：W: 仅作数据工作区，不再承接桌面/文档/下载等个人 shell 文件夹。
+# 本段做两件事（幂等，可反复执行）：
+#   ① 若此前曾被本脚本重定向到 W:\，把 W:\Desktop / W:\Documents / W:\Downloads
+#      里的存量内容增量搬回本地默认目录（不删 W: 原件）；
+#   ② 注册表 User Shell Folders / Shell Folders 指回本地默认路径，
+#      此后任何软件读写"桌面/文档/下载"都落在 C:\Users\<用户名>\ 下。
+if (-not $IsAdmin) {
+    $userShellKey   = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\User Shell Folders"
+    $shellFoldersKey = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Shell Folders"
+    $dlGuid = "{374DE290-123F-4565-9164-39C4925E467B}"
+
+    $profileDir = $env:USERPROFILE
+    $defaultDesktop   = "$profileDir\Desktop"
+    $defaultDocuments = "$profileDir\Documents"
+    $defaultDownloads = "$profileDir\Downloads"
+    foreach ($p in @($defaultDesktop, $defaultDocuments, $defaultDownloads)) {
         New-Item -ItemType Directory -Path $p -Force | Out-Null
     }
 
-    # 3.2 首次重定向：把旧位置的存量文件复制进 W:（不删原件，复制后置标记，幂等）
-    $migFlag = "W:\.folder_redir_migrated"
-    if (-not (Test-Path $migFlag)) {
-        $oldDesktop   = [Environment]::GetFolderPath("Desktop")
-        $oldDocuments = [Environment]::GetFolderPath("MyDocuments")
-        $shellFoldersKey = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Shell Folders"
-        $dlGuid = "{374DE290-123F-4565-9164-39C4925E467B}"
-        $oldDownloads = (Get-ItemProperty -Path $shellFoldersKey -Name $dlGuid -ErrorAction SilentlyContinue).$dlGuid
+    # ① 存量回搬（仅当注册表当前指向 W:\ 时执行一次）
+    $curDesktop   = (Get-ItemProperty -Path $userShellKey -Name "Desktop" -ErrorAction SilentlyContinue).Desktop
+    $curDocuments = (Get-ItemProperty -Path $userShellKey -Name "Personal" -ErrorAction SilentlyContinue).Personal
+    $curDownloads = (Get-ItemProperty -Path $userShellKey -Name $dlGuid -ErrorAction SilentlyContinue).$dlGuid
 
-        foreach ($pair in @(
-            @($oldDesktop,   $RedirDesktop),
-            @($oldDocuments, $RedirDocuments),
-            @($oldDownloads, $RedirDownloads)
-        )) {
-            $src, $dst = $pair
-            if ($src -and (Test-Path $src) -and ($src -notlike "W:\*")) {
-                # robocopy 退出码 0-7 均属成功；/XJ 排除联接点防止递归
-                robocopy $src $dst /E /XJ /R:1 /W:1 /NFL /NDL /NJH /NJS | Out-Null
-            }
+    foreach ($pair in @(
+        @($curDesktop,   "W:\Desktop",   $defaultDesktop,   "Desktop"),
+        @($curDocuments, "W:\Documents", $defaultDocuments, "Personal"),
+        @($curDownloads, "W:\Downloads", $defaultDownloads, $dlGuid)
+    )) {
+        $cur, $wsrc, $dst, $name = $pair
+        if ($cur -like "W:\*" -and (Test-Path $wsrc)) {
+            robocopy $wsrc $dst /E /XJ /R:1 /W:1 /NFL /NDL /NJH /NJS /XF desktop.ini | Out-Null
         }
-        New-Item -ItemType File -Path $migFlag -Force | Out-Null
+        # ② 注册表归位（无论此前是否重定向，统一写回本地默认，幂等）
+        Set-ItemProperty -Path $userShellKey   -Name $name -Value $dst -Type ExpandString
+        Set-ItemProperty -Path $shellFoldersKey -Name $name -Value $dst -Type String
     }
 
-    # 3.3 注册表重定向：此后任何软件读写"桌面/文档/下载"都实际落在本人 W: 盘
-    $userShellKey = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\User Shell Folders"
-    Set-ItemProperty -Path $userShellKey -Name "Desktop"   -Value $RedirDesktop   -Type ExpandString
-    Set-ItemProperty -Path $userShellKey -Name "Personal"  -Value $RedirDocuments -Type ExpandString
-    Set-ItemProperty -Path $userShellKey -Name "{374DE290-123F-4565-9164-39C4925E467B}" `
-                     -Value $RedirDownloads -Type ExpandString
-
-    # 3.4 隐藏 C: 盘并禁止资源管理器/标准"另存为"对话框访问（位掩码 4 = C:；
-    #     只影响图形界面浏览，不影响软件从 Program Files 运行；W:/Z: 网络盘不受限）
-    #     安全基线通常把 HKCU\Software\Policies 锁为仅管理员可写，写失败静默降级
-    #     （策略降级后果：C: 盘对用户可见但不可写入，业务不受影响）。
+    # 隐藏 C: 盘策略 + 文件对话框左侧栏（保留原有安全策略，与 shell 文件夹归位无关）
     try {
         $polExplorer = "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\Explorer"
         New-Item -Path $polExplorer -Force -ErrorAction Stop | Out-Null
         Set-ItemProperty -Path $polExplorer -Name "NoDrives"       -Value 4 -Type DWord -ErrorAction Stop
         Set-ItemProperty -Path $polExplorer -Name "NoViewOnDrive"  -Value 4 -Type DWord -ErrorAction Stop
 
-        # 3.5 标准文件对话框左侧栏：我的工作区 / 本人待导出目录 / 原始数据
         $placesKey = "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\ComDlg32\PlacesBar"
         New-Item -Path $placesKey -Force -ErrorAction Stop | Out-Null
         New-ItemProperty -Path $placesKey -Name "Place0" -Value "W:\"         -PropertyType String -Force -ErrorAction Stop | Out-Null
@@ -157,34 +152,6 @@ if (-not $IsAdmin -and (Test-Path $WDrive)) {
     } catch {
         Write-Warning "HKCU\Policies 不可写（安全基线锁定），跳过隐藏C盘/自定义侧栏：$($_.Exception.Message)"
     }
-} elseif (-not $IsAdmin) {
-    # 3.6 W: 盘不可用（工作区未开通或共享异常）：回退文件夹重定向到本地默认路径，
-    #     避免上次登录已重定向到 W:\Desktop 但本次 W: 缺失时弹出"位置不可用"。
-    $userShellKey = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\User Shell Folders"
-    $shellFoldersKey = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Shell Folders"
-    $curDesktop   = (Get-ItemProperty -Path $userShellKey -Name "Desktop" -ErrorAction SilentlyContinue).Desktop
-    $curDocuments = (Get-ItemProperty -Path $userShellKey -Name "Personal" -ErrorAction SilentlyContinue).Personal
-    $dlGuid = "{374DE290-123F-4565-9164-39C4925E467B}"
-    $curDownloads = (Get-ItemProperty -Path $userShellKey -Name $dlGuid -ErrorAction SilentlyContinue).$dlGuid
-
-    $profileDir = $env:USERPROFILE
-    $defaultDesktop   = "$profileDir\Desktop"
-    $defaultDocuments = "$profileDir\Documents"
-    $defaultDownloads = "$profileDir\Downloads"
-
-    if ($curDesktop -like "W:\*") {
-        Set-ItemProperty -Path $userShellKey -Name "Desktop" -Value $defaultDesktop -Type ExpandString
-        Set-ItemProperty -Path $shellFoldersKey -Name "Desktop" -Value $defaultDesktop -Type String
-    }
-    if ($curDocuments -like "W:\*") {
-        Set-ItemProperty -Path $userShellKey -Name "Personal" -Value $defaultDocuments -Type ExpandString
-        Set-ItemProperty -Path $shellFoldersKey -Name "Personal" -Value $defaultDocuments -Type String
-    }
-    if ($curDownloads -like "W:\*") {
-        Set-ItemProperty -Path $userShellKey -Name $dlGuid -Value $defaultDownloads -Type ExpandString
-        Set-ItemProperty -Path $shellFoldersKey -Name $dlGuid -Value $defaultDownloads -Type String
-    }
-    Write-Warning "W: 盘不可用，文件夹重定向已回退到本地默认路径。请检查工作区目录与 SMB 共享。"
 }
 
 # ============================================================
@@ -212,26 +179,13 @@ if ($UserId -gt 0) {
 # ============================================================
 # 5. Create desktop shortcuts
 # ============================================================
-# 普通用户的"桌面"已在第 3 步重定向到 W:\Desktop；同进程 Shell API 可能仍缓存
-# 旧路径，这里直接按身份取目标目录，保证快捷方式一次到位。
-# 兜底链：W:\Desktop（已重定向）→ $env:USERPROFILE\Desktop（本地默认）→ 显式组装。
+# 桌面已归位本地默认（第 3 段）；同进程 Shell API 可能仍缓存旧路径，按身份取目标目录。
+# 兜底链：$env:USERPROFILE\Desktop（本地默认）→ 显式组装。
 # 绝不回退到 COM 惰性解析（在 Desktop 注册表值刚被本脚本改过的窗口期，它会把
 # 基址解析成当前目录 C:\，导致快捷方式写进 C 盘根目录触发拒绝访问）。
-if ($IsAdmin -or -not (Test-Path $WDrive)) {
-    $Desktop = [Environment]::GetFolderPath("Desktop")
-    if ([string]::IsNullOrWhiteSpace($Desktop)) { $Desktop = Join-Path $env:USERPROFILE "Desktop" }
-} else {
-    $Desktop = $RedirDesktop
-}
+$Desktop = [Environment]::GetFolderPath("Desktop")
+if ([string]::IsNullOrWhiteSpace($Desktop)) { $Desktop = Join-Path $env:USERPROFILE "Desktop" }
 $Shell = New-Object -ComObject WScript.Shell
-
-# 历史补偿：W: 曾不可用期间，快捷方式/文件可能落在本地 profile 桌面
-# （3.2 的一次性迁移标记那时已置位，不会再复制）。每次登录做一次
-# robocopy 增量同步（幂等，仅复制差异），把本地桌面的存量内容补进 W:\Desktop。
-$profileDesktop = Join-Path $env:USERPROFILE "Desktop"
-if ((-not $IsAdmin) -and (Test-Path $WDrive) -and (Test-Path $profileDesktop)) {
-    robocopy $profileDesktop $Desktop /E /XJ /R:1 /W:1 /NFL /NDL /NJH /NJS /XF desktop.ini | Out-Null
-}
 
 # 软件快捷方式表：后续新装统计软件时，在此表追加一条即可（key/Path/Name）。
 # 快捷方式起始目录一律为 W:，用户打开/保存默认就在本人私有工作区；
