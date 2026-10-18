@@ -65,6 +65,12 @@ $UserPending   = "$PendingRoot\$Username"
 if (Test-Path $UserWorkspace) {
     if (Test-Path $WDrive) { net use $WDrive /delete /y | Out-Null }
     net use $WDrive $UserWorkspace /persistent:yes | Out-Null
+    # net use 返回即驱动器可用，但同进程 Test-Path 偶发拿不到状态；强制刷新并重试
+    if (-not (Test-Path $WDrive)) {
+        $ShellProbe = New-Object -ComObject Shell.Application
+        $ShellProbe.NameSpace($WDrive) | Out-Null
+        Start-Sleep -Milliseconds 300
+    }
 } else {
     Write-Warning "私有工作区不存在（后端尚未开通？）: $UserWorkspace"
 }
@@ -208,8 +214,12 @@ if ($UserId -gt 0) {
 # ============================================================
 # 普通用户的"桌面"已在第 3 步重定向到 W:\Desktop；同进程 Shell API 可能仍缓存
 # 旧路径，这里直接按身份取目标目录，保证快捷方式一次到位。
+# 兜底链：W:\Desktop（已重定向）→ $env:USERPROFILE\Desktop（本地默认）→ 显式组装。
+# 绝不回退到 COM 惰性解析（在 Desktop 注册表值刚被本脚本改过的窗口期，它会把
+# 基址解析成当前目录 C:\，导致快捷方式写进 C 盘根目录触发拒绝访问）。
 if ($IsAdmin -or -not (Test-Path $WDrive)) {
     $Desktop = [Environment]::GetFolderPath("Desktop")
+    if ([string]::IsNullOrWhiteSpace($Desktop)) { $Desktop = Join-Path $env:USERPROFILE "Desktop" }
 } else {
     $Desktop = $RedirDesktop
 }
