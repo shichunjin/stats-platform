@@ -74,8 +74,16 @@ if (Test-Path $UserWorkspace) {
 # ============================================================
 # 后端在注册/投递时已锁定；这里做幂等兜底。
 # SYSTEM/Administrators 使用 SID 形式，避免中文版系统名称本地化问题。
+# 注意：$IsAdmin 必须在此之前定义（本段及第 3 段都依赖）。
+$Identity  = [Security.Principal.WindowsIdentity]::GetCurrent()
+$Principal = New-Object Security.Principal.WindowsPrincipal($Identity)
+$IsAdmin   = $Principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+
 function Lock-PrivateFolder($path) {
     if (-not (Test-Path $path)) { return }
+    # 仅管理员（后端 SSH 通道）可重申 ACL：共享授权为 Change 级别，不含改 ACL 权限，
+    # 普通用户经 UNC 调 icacls 必然"拒绝访问"（输出噪音且无意义），跳过。
+    if (-not $IsAdmin) { return }
     icacls $path /inheritance:r | Out-Null
     icacls $path /grant "${Username}:(OI)(CI)F" "*S-1-5-18:(OI)(CI)F" "*S-1-5-32-544:(OI)(CI)F" | Out-Null
 }
@@ -85,10 +93,6 @@ Lock-PrivateFolder $UserPending
 # ============================================================
 # 3. 生成物落点强制：文件夹重定向 + 隐藏 C: 盘（普通用户；管理员豁免）
 # ============================================================
-$Identity  = [Security.Principal.WindowsIdentity]::GetCurrent()
-$Principal = New-Object Security.Principal.WindowsPrincipal($Identity)
-$IsAdmin   = $Principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
-
 if (-not $IsAdmin -and (Test-Path $WDrive)) {
     # 3.1 桌面/文档/下载的物理位置改到 W: 私有工作区下
     $RedirDesktop   = "W:\Desktop"
@@ -130,17 +134,23 @@ if (-not $IsAdmin -and (Test-Path $WDrive)) {
 
     # 3.4 隐藏 C: 盘并禁止资源管理器/标准"另存为"对话框访问（位掩码 4 = C:；
     #     只影响图形界面浏览，不影响软件从 Program Files 运行；W:/Z: 网络盘不受限）
-    $polExplorer = "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\Explorer"
-    New-Item -Path $polExplorer -Force | Out-Null
-    Set-ItemProperty -Path $polExplorer -Name "NoDrives"       -Value 4 -Type DWord
-    Set-ItemProperty -Path $polExplorer -Name "NoViewOnDrive"  -Value 4 -Type DWord
+    #     安全基线通常把 HKCU\Software\Policies 锁为仅管理员可写，写失败静默降级
+    #     （策略降级后果：C: 盘对用户可见但不可写入，业务不受影响）。
+    try {
+        $polExplorer = "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\Explorer"
+        New-Item -Path $polExplorer -Force -ErrorAction Stop | Out-Null
+        Set-ItemProperty -Path $polExplorer -Name "NoDrives"       -Value 4 -Type DWord -ErrorAction Stop
+        Set-ItemProperty -Path $polExplorer -Name "NoViewOnDrive"  -Value 4 -Type DWord -ErrorAction Stop
 
-    # 3.5 标准文件对话框左侧栏：我的工作区 / 本人待导出目录 / 原始数据
-    $placesKey = "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\ComDlg32\PlacesBar"
-    New-Item -Path $placesKey -Force | Out-Null
-    New-ItemProperty -Path $placesKey -Name "Place0" -Value "W:\"         -PropertyType String -Force | Out-Null
-    New-ItemProperty -Path $placesKey -Name "Place1" -Value $UserPending  -PropertyType String -Force | Out-Null
-    New-ItemProperty -Path $placesKey -Name "Place2" -Value "Z:\"         -PropertyType String -Force | Out-Null
+        # 3.5 标准文件对话框左侧栏：我的工作区 / 本人待导出目录 / 原始数据
+        $placesKey = "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\ComDlg32\PlacesBar"
+        New-Item -Path $placesKey -Force -ErrorAction Stop | Out-Null
+        New-ItemProperty -Path $placesKey -Name "Place0" -Value "W:\"         -PropertyType String -Force -ErrorAction Stop | Out-Null
+        New-ItemProperty -Path $placesKey -Name "Place1" -Value $UserPending  -PropertyType String -Force -ErrorAction Stop | Out-Null
+        New-ItemProperty -Path $placesKey -Name "Place2" -Value "Z:\"         -PropertyType String -Force -ErrorAction Stop | Out-Null
+    } catch {
+        Write-Warning "HKCU\Policies 不可写（安全基线锁定），跳过隐藏C盘/自定义侧栏：$($_.Exception.Message)"
+    }
 } elseif (-not $IsAdmin) {
     # 3.6 W: 盘不可用（工作区未开通或共享异常）：回退文件夹重定向到本地默认路径，
     #     避免上次登录已重定向到 W:\Desktop 但本次 W: 缺失时弹出"位置不可用"。
