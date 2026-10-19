@@ -53,6 +53,67 @@ def _migrate_schema():
             ))
             conn.commit()
 
+    # 软件维度下线：移除 sessions.software（原 RStudio/Mplus/Stata 专用字段）
+    if "sessions" in insp.get_table_names():
+        cols = [c["name"] for c in insp.get_columns("sessions")]
+        if "software" in cols:
+            _drop_sessions_software_column(insp)
+
+
+def _drop_sessions_software_column(insp):
+    """移除 sessions.software 列（软件维度下线，幂等）。
+
+    software 为 NOT NULL 且无默认值：若列残留而代码不再写入，后续
+    INSERT INTO sessions 会因 NOT NULL 约束失败、用户无法建立会话，
+    因此兜底必须真正完成列移除而非仅告警。
+    SQLite ≥ 3.35 直接 DROP COLUMN；更低版本按剩余列重建表并拷贝数据。
+    重建 SQL 由 inspector 列元数据拼装（不硬编码列清单），单事务执行，
+    失败即回滚，不破坏原表。
+    """
+    from sqlalchemy import text
+
+    table = "sessions"
+    all_cols = insp.get_columns(table)
+    remaining = [c for c in all_cols if c["name"] != "software"]
+    pk_cols = set(insp.get_pk_constraint(table).get("constrained_columns") or [])
+    # 反射结果须在改表前取好（索引随 DROP TABLE 一并消失）
+    original_indexes = insp.get_indexes(table)
+
+    try:
+        with engine.begin() as conn:
+            conn.execute(text(f'ALTER TABLE {table} DROP COLUMN software'))
+        logger.info("已迁移: sessions 表移除 software 列")
+        return
+    except Exception as exc:  # noqa: BLE001 — 旧版 SQLite 不支持 DROP COLUMN
+        logger.info("DROP COLUMN 不可用（%s），改用重建表移除 sessions.software", exc)
+
+    names = [c["name"] for c in remaining]
+    defs = []
+    for c in remaining:
+        ddl = f'"{c["name"]}" {c["type"].compile(engine.dialect)}'
+        if not c["nullable"]:
+            ddl += " NOT NULL"
+        defs.append(ddl)
+    kept_pk = [n for n in names if n in pk_cols]
+    if kept_pk:
+        defs.append("PRIMARY KEY (" + ", ".join(f'"{n}"' for n in kept_pk) + ")")
+    col_list = ", ".join(f'"{n}"' for n in names)
+
+    with engine.begin() as conn:
+        conn.execute(text("CREATE TABLE sessions_new (\n    " + ",\n    ".join(defs) + "\n)"))
+        conn.execute(text(f"INSERT INTO sessions_new ({col_list}) SELECT {col_list} FROM {table}"))
+        conn.execute(text(f"DROP TABLE {table}"))
+        conn.execute(text("ALTER TABLE sessions_new RENAME TO sessions"))
+        for idx in original_indexes:
+            idx_cols = ", ".join(f'"{n}"' for n in (idx.get("column_names") or []) if n)
+            if not idx_cols:
+                continue
+            unique = "UNIQUE " if idx.get("unique") else ""
+            conn.execute(text(
+                f'CREATE {unique}INDEX IF NOT EXISTS "{idx["name"]}" ON sessions ({idx_cols})'
+            ))
+    logger.info("已迁移: sessions 表重建并移除 software 列")
+
 
 _migrate_schema()
 
@@ -120,7 +181,7 @@ app = FastAPI(
     description="""
 # 统计软件托管平台 API 文档
 
-在 **不修改无源码 Windows 桌面软件** 的前提下，让用户通过浏览器使用 RStudio、Mplus Editor、StataSE 18 等统计软件。
+在 **不修改无源码 Windows 桌面软件** 的前提下，让用户通过浏览器使用 Windows 分析主机上的桌面软件。
 
 ## 核心能力
 

@@ -109,12 +109,9 @@ class Settings(BaseSettings):
     # guacd 容器内会话录像根目录，按用户名建子目录隔离；留空不录像
     guac_recording_root: str = ""
 
-    # 各软件安装路径 (Windows Server 上)
-    rstudio_path: str = r"C:\Program Files\RStudio\rstudio.exe"
-    mplus_path: str = r"C:\Program Files\Mplus Demo\Mpdwin.exe"
-    stata_path: str = r"C:\Program Files\Stata18\StataSE-64.exe"
-
     # PowerShell 登录脚本路径
+    # 登录脚本同目录需放置 software-registry.json（桌面软件注册表，运维手工维护并部署；
+    # 脚本读取该 JSON 生成软件快捷方式，平台侧不参与管理）
     ps_login_script: str = r"\\fileserver\scripts\login.ps1"
 
     model_config = {"env_file": ".env", "env_file_encoding": "utf-8"}

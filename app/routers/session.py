@@ -78,7 +78,6 @@ def connect_session(
 
     session = SessionModel(
         user_id=user.id,
-        software="windows",
         guac_identifier=guac_id,
         status="active",
     )
@@ -97,7 +96,6 @@ def connect_session(
 
     return SessionOut(
         id=session.id,
-        software=session.software,
         status=session.status,
         guac_url=guac_url,
         launched_at=session.launched_at,

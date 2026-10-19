@@ -10,6 +10,8 @@
 -- 安全修复 Phase 3（2026-10）：
 --   data_applies.status 扩展 generating | failed（C1 异步生成）
 --   新增表            platform_config（C4 平台连接配置落库，密码永不落库）
+--   移除列            sessions.software（软件维度下线：原 RStudio/Mplus/Stata 专用字段；
+--                    桌面软件清单改由 Windows 端 software-registry.json 维护，平台不再感知）
 -- 生产以应用启动时的 create_all + 幂等迁移为准（Alembic 规划于 Phase 4），
 -- 本文件供按 README 手工建库与结构审阅使用。
 -- ============================================================
@@ -49,7 +51,6 @@ CREATE TABLE user_scope (
 CREATE TABLE sessions (
     id              SERIAL PRIMARY KEY,
     user_id         INTEGER NOT NULL REFERENCES users(id),
-    software        VARCHAR(32)  NOT NULL,      -- rstudio | mplus | stata
     win_session_id  VARCHAR(128),               -- RDS session ID / Guacamole ID
     guac_identifier VARCHAR(128),               -- Guacamole connection identifier
     status          VARCHAR(16)  NOT NULL DEFAULT 'pending', -- pending|active|ended

@@ -3,8 +3,9 @@
     Stats platform - Windows user login script
 .DESCRIPTION
     Maps W: (private, writable workspace keyed by the Windows/平台用户名) and
-    optionally re-asserts the user's private folder ACLs, sets software
-    environment variables, creates desktop shortcuts, and launches software.
+    optionally re-asserts the user's private folder ACLs, sets common
+    environment variables, creates desktop shortcuts from the software
+    registry (software-registry.json), and optionally launches a registered software.
 
     目录约定（必须与后端 app/config.py 一致）：
       W:      -> \\127.0.0.1\workspace\<用户名>   (C:\workspace\<用户名>)
@@ -155,21 +156,8 @@ if (-not $IsAdmin) {
 }
 
 # ============================================================
-# 4. Set registry/environment variables: software working directories
+# 4. Set common environment variables（结果目录等，与具体软件无关）
 # ============================================================
-# RStudio
-[Environment]::SetEnvironmentVariable("RSTUDIO_HOME", $WDrive, "User")
-[Environment]::SetEnvironmentVariable("RSTUDIO_DATA_DIR", $ZDrive, "User")
-
-# Mplus
-[Environment]::SetEnvironmentVariable("MPLUS_DATA", $ZDrive, "User")
-[Environment]::SetEnvironmentVariable("MPLUS_WORK", $WDrive, "User")
-[Environment]::SetEnvironmentVariable("MPLUS_RESULTS", $UserPending, "User")
-
-# Stata
-[Environment]::SetEnvironmentVariable("STATA_WORK", $WDrive, "User")
-[Environment]::SetEnvironmentVariable("STATA_DATA", $ZDrive, "User")
-
 # Common: result output directory
 [Environment]::SetEnvironmentVariable("RESULTS_DIR", $UserPending, "User")
 if ($UserId -gt 0) {
@@ -187,38 +175,34 @@ $Desktop = [Environment]::GetFolderPath("Desktop")
 if ([string]::IsNullOrWhiteSpace($Desktop)) { $Desktop = Join-Path $env:USERPROFILE "Desktop" }
 $Shell = New-Object -ComObject WScript.Shell
 
-# 软件快捷方式表：后续新装统计软件时，在此表追加一条即可（key/Path/Name）。
+# 软件快捷方式表来自同目录的 software-registry.json（运维手工维护并复制到本机，
+# 平台不参与管理）。条目格式（JSON 数组）：
+#   [{ "key": "myapp", "name": "MyApp", "path": "C:\\Program Files\\MyApp\\myapp.exe", "args": "" }]
 # 快捷方式起始目录一律为 W:，用户打开/保存默认就在本人私有工作区；
-# 若该软件支持启动配置（类似 Rprofile.site / profile.do），另需在
-# enforce-output-location.ps1 增加对应的启动目录固化段。
-$SoftwareConfigs = @{
-    rstudio = @{
-        Path = "C:\Program Files\RStudio\rstudio.exe"
-        Name = "RStudio"
-        Args = ""
+# 仅当 path 在本机存在时才创建，未安装的软件不会产生快捷方式。
+# 新接入软件若需要固化启动目录（软件专有的启动配置机制），
+# 另需在 enforce-output-location.ps1 增加对应处理段。
+$RegistryPath = Join-Path $PSScriptRoot 'software-registry.json'
+$SoftwareConfigs = @()
+if (Test-Path $RegistryPath) {
+    try {
+        $SoftwareConfigs = @(Get-Content $RegistryPath -Raw -Encoding UTF8 | ConvertFrom-Json)
+    } catch {
+        Write-Warning "软件注册表解析失败，本次跳过软件快捷方式创建：$($_.Exception.Message)"
     }
-    mplus = @{
-        Path = "C:\Program Files\Mplus Demo\Mpdwin.exe"
-        Name = "Mplus Demo"
-        Args = ""
-    }
-    stata = @{
-        Path = "C:\Program Files\Stata18\StataSE-64.exe"
-        Name = "Stata SE 18"
-        Args = ""
-    }
+} else {
+    Write-Warning "未找到软件注册表 $RegistryPath，本次跳过软件快捷方式创建。"
 }
 
-# Create shortcuts for all installed software
-foreach ($key in $SoftwareConfigs.Keys) {
-    $cfg = $SoftwareConfigs[$key]
-    if (Test-Path $cfg.Path) {
-        $lnkPath = "$Desktop\$($cfg.Name).lnk"
+# Create shortcuts for all registered & installed software
+foreach ($cfg in $SoftwareConfigs) {
+    if (Test-Path $cfg.path) {
+        $lnkPath = "$Desktop\$($cfg.name).lnk"
         $shortcut = $Shell.CreateShortcut($lnkPath)
-        $shortcut.TargetPath = $cfg.Path
-        $shortcut.Arguments = $cfg.Args
+        $shortcut.TargetPath = $cfg.path
+        $shortcut.Arguments = $cfg.args
         $shortcut.WorkingDirectory = $WDrive
-        $shortcut.IconLocation = $cfg.Path
+        $shortcut.IconLocation = $cfg.path
         $shortcut.Save()
     }
 }
@@ -269,13 +253,18 @@ try {
 # ============================================================
 # 7. Launch the specified software
 # ============================================================
-if ($Software -and $SoftwareConfigs.ContainsKey($Software.ToLower())) {
-    $cfg = $SoftwareConfigs[$Software.ToLower()]
-    if (Test-Path $cfg.Path) {
-        Start-Process -FilePath $cfg.Path -WorkingDirectory $WDrive
-        Write-Host "Launched ${Software}: $($cfg.Path)"
+# 按注册表 key 匹配启动（key 与 $Software 均按小写比较）
+if ($Software) {
+    $cfg = $SoftwareConfigs |
+        Where-Object { $_.key -eq $Software.ToLower() } |
+        Select-Object -First 1
+    if ($cfg -and (Test-Path $cfg.path)) {
+        Start-Process -FilePath $cfg.path -WorkingDirectory $WDrive
+        Write-Host "Launched ${Software}: $($cfg.path)"
+    } elseif ($cfg) {
+        Write-Warning "Software not installed: $($cfg.path)"
     } else {
-        Write-Warning "Software not installed: $($cfg.Path)"
+        Write-Warning "Software not registered: $Software"
     }
 }
 

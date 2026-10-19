@@ -4,6 +4,7 @@ import csv
 import tempfile
 
 import pytest
+from sqlalchemy import inspect
 
 from app.auth import create_access_token
 from app.models import User, Scope, PendingFile, ExportResult, AuditLog, Message, Session as SessionModel
@@ -179,7 +180,8 @@ class TestSessionConnect:
         resp = client.post("/session/connect", headers=auth_headers)
         assert resp.status_code == 200
         data = resp.json()
-        assert data["software"] == "windows"
+        # 软件维度已下线：响应体不应再含 software 键
+        assert "software" not in data
         assert data["status"] == "active"
         assert "guac_url" in data
         assert data["guac_url"].endswith("42")
@@ -237,7 +239,10 @@ class TestSessionConnect:
         session_id = resp.json()["id"]
         record = db_session.query(SessionModel).filter(SessionModel.id == session_id).first()
         assert record is not None
-        assert record.software == "windows"
+        # 软件维度已下线：sessions 表不应再含 software 列
+        insp = inspect(db_session.get_bind())
+        cols = [c["name"] for c in insp.get_columns("sessions")]
+        assert "software" not in cols
 
 
 # ============================================================

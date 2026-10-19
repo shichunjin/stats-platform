@@ -38,7 +38,6 @@ export interface Scope {
 // ---- 会话 ----
 export interface SessionInfo {
   id: number
-  software: string
   status: 'active' | 'ended'
   guac_url?: string | null
   launched_at?: string | null

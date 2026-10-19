@@ -66,15 +66,10 @@ class UserOut(BaseModel):
 
 
 # ---- Session ----
-class SessionLaunchRequest(BaseModel):
-    software: str = Field(..., description="软件标识：rstudio|mplus|stata")
-
-
 class SessionOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: int = Field(..., description="会话 ID")
-    software: str = Field(..., description="软件标识：rstudio|mplus|stata")
     status: str = Field(..., description="会话状态：active=活跃 / ended=已结束")
     guac_url: Optional[str] = Field(None, description="Guacamole 浏览器访问 URL")
     launched_at: Optional[datetime] = Field(None, description="会话启动时间")

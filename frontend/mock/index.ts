@@ -101,7 +101,7 @@ export default [
   {
     url: '/api/session/connect',
     method: 'post',
-    response: () => ({ id: 1, software: 'rstudio', status: 'active', guac_url: '#', launched_at: now }),
+    response: () => ({ id: 1, status: 'active', guac_url: '#', launched_at: now }),
   },
 
   // 数据

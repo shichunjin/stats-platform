@@ -46,7 +46,6 @@ class Session(Base):
     __tablename__ = "sessions"
     id = Column(Integer, primary_key=True, autoincrement=True)
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
-    software = Column(String(32), nullable=False)    # rstudio | mplus | stata
     win_session_id = Column(String(128))
     guac_identifier = Column(String(128))
     status = Column(String(16), default="pending")    # pending|active|ended

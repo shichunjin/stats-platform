@@ -1,4 +1,4 @@
-﻿# ============================================================
+# ============================================================
 # setup-rdsh.ps1 — Single-host RDS Session Host deployment (workgroup / no AD)
 # ============================================================
 #
@@ -183,5 +183,6 @@ Write-Host " Next steps:"
 Write-Host "   1. Run security config: .\configure-rds.ps1"
 Write-Host "   2. Restart TermService to apply licensing: Restart-Service TermService -Force"
 Write-Host "   3. In guacamole/user-mapping.xml, set hostname to this server's IP"
-Write-Host "   4. Install stats software (RStudio / Mplus / StataSE 18)"
+Write-Host "   4. Install the required desktop software, then register each entry in"
+Write-Host "      powershell/software-registry.json and re-deploy it to C:\stats-scripts\"
 Write-Host ""

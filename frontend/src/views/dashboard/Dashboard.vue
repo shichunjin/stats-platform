@@ -82,7 +82,7 @@ onMounted(() => {
 
 async function connect() {
   try {
-    const res = await connectSession('rstudio')
+    const res = await connectSession()
     if (res.guac_url) window.open(res.guac_url, '_blank')
     ElMessage.success('已建立 Windows 分析会话')
   } catch {

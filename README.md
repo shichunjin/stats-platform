@@ -1,12 +1,12 @@
 # 统计软件托管平台
 
-在不修改无源码 Windows 桌面软件的前提下，让用户通过浏览器使用 RStudio、Mplus Editor、StataSE 18 等统计软件，并提供数据隔离、原始数据保护和结果审查功能。
+在不修改无源码 Windows 桌面软件的前提下，让用户通过浏览器使用 Windows 分析主机上的桌面软件，并提供数据隔离、原始数据保护和结果审查功能。
 
 ## 核心特性
 
-- **软件全开放**：所有登录用户均可使用全部统计软件，无软件级权限限制
+- **软件全开放**：所有登录用户均可使用该主机上安装的全部桌面软件，无软件级权限限制
 - **数据权限隔离**：用户之间的唯一区别是数据权限，每人只能访问自己部门/项目范围内的数据
-- **浏览器远程使用**：通过 Apache Guacamole + RDS，用户在浏览器中即可操作统计软件
+- **浏览器远程使用**：通过 Apache Guacamole + RDS，用户在浏览器中即可操作桌面软件
 - **原始数据保护**：禁用剪贴板、本地驱动器映射、打印重定向，防止数据泄露
 - **结果审查导出**：分析结果经白名单/敏感字段/行数/聚合检查后才能下载
 - **多用户并行**：每用户独立 RDS 会话 + 独立工作区（W: 盘），互不干扰
@@ -19,7 +19,7 @@
 | 后端 API | Python FastAPI |
 | 远程桌面 | Windows Server 2022 + RDS + Apache Guacamole |
 | 数据库 | PostgreSQL |
-| 统计软件 | RStudio Desktop / Mplus + Mplus Editor / StataSE 18 |
+| 桌面软件 | 不限具体软件；清单由 Windows 端 `software-registry.json` 维护 |
 
 ## 项目结构
 
@@ -37,7 +37,7 @@ stats-platform/
 │   └── routers/                # 路由模块
 │       ├── __init__.py
 │       ├── auth.py             # POST /auth/login, GET /me
-│       ├── session.py          # POST /session/launch/{software}
+│       ├── session.py          # POST /session/connect
 │       ├── results.py           # GET /results/mine, POST /results/scan, POST /results/{id}/download
 │       └── admin.py            # GET /admin/audit, GET /admin/pending
 ├── guacamole/                  # Guacamole 部署配置
@@ -46,8 +46,9 @@ stats-platform/
 │   └── .env.example            # 数据库密码环境变量模板
 ├── powershell/                 # Windows 脚本
 │   ├── setup-rdsh.ps1          # RDS 会话主机部署脚本（装角色/配许可/建本地用户，无域环境）
-│   ├── login.ps1               # 用户登录脚本（映射 Z:/W: 盘、环境变量、快捷方式、落点强制）
-│   ├── enforce-output-location.ps1 # 机器级落点强制（R/Stata 启动目录、通用对话框位置栏，新装软件后重跑）
+│   ├── login.ps1               # 用户登录脚本（映射 Z:/W: 盘、环境变量、按注册表建快捷方式、落点强制）
+│   ├── software-registry.json  # 桌面软件注册表（桌面快捷方式清单，运维手工维护并部署）
+│   ├── enforce-output-location.ps1 # 机器级落点强制（通用对话框位置栏，新装软件后重跑）
 │   └── configure-rds.ps1       # RDS 安全配置（禁用剪贴板/驱动器/打印）
 ├── schema.sql                  # PostgreSQL 数据库 DDL
 └── requirements.txt            # Python 依赖
@@ -81,7 +82,7 @@ stats-platform/
 | `users` | 用户表（username, ad_sid, dept_id, role） |
 | `scopes` | 部门/项目范围（scope_code, scope_type, data_path） |
 | `user_scope` | 用户-范围关联（多对多） |
-| `sessions` | 远程会话记录（software, guac_identifier, status） |
+| `sessions` | 远程会话记录（guac_identifier, status） |
 | `pending_files` | 导出申请（file_path, status, review_reason） |
 | `export_results` | 已发布结果（result_name, file_path, download_count） |
 | `audit_logs` | 审计日志（action, detail, ip_addr） |
@@ -160,7 +161,7 @@ cp .env.example .env  # 修改数据库连接、JWT 密钥等
 uvicorn app.main:app --host 0.0.0.0 --port 8000
 ```
 
-### 2. Windows Server 2022（RDS 会话主机 + 统计软件）
+### 2. Windows Server 2022（RDS 会话主机 + 桌面软件）
 
 > **部署模式：单机 + 无域 + IP 访问**
 > 本架构仅需 Remote Desktop Session Host 角色，通过 Guacamole → RDP → 服务器 IP 直连，**不需要** Active Directory 域、Connection Broker 或 RDS 部署。
@@ -185,19 +186,25 @@ Set-ExecutionPolicy Bypass -Scope Process -Force
 .\powershell\configure-rds.ps1
 Restart-Service -Name TermService -Force
 
-# ③ 安装统计软件
-# RStudio Desktop → C:\Program Files\RStudio\bin\rstudio.exe
-# Mplus           → C:\Program Files\Mplus\mplus.exe
-# Stata SE 18     → C:\Program Files\Stata18\StataSE-64.exe
+# ③ 安装所需桌面软件到 C:\Program Files（或任意固定路径），
+#     再把每个软件的启动信息登记到 powershell\software-registry.json，
+#     登录脚本据此为每位用户生成桌面快捷方式。
+#   示例（按实际安装路径填写）：
+#     [
+#       { "key": "spss", "name": "SPSS",  "path": "C:\\Program Files\\IBM\\SPSS\\Statistics\\client\\stats.exe", "args": "" },
+#       { "key": "r",   "name": "R",     "path": "C:\\Program Files\\R\\R-4.3.2\\bin\\Rgui.exe",                "args": "" }
+#     ]
 
-# ③.5 软件安装后运行一次：固化启动工作目录、锁定通用"另存为"位置栏
-#      （新装/升级任何统计软件后重跑一次即可，幂等）
+# ③.5 软件安装后运行一次：锁定通用"另存为"位置栏、加固 C: 根 ACL
+#      （新装/升级任何桌面软件后重跑一次即可，幂等）
 .\powershell\enforce-output-location.ps1
 
 # ④ 部署登录脚本（单机一体部署：放本机固定目录 + 公共启动项）
 $scriptsDir = "C:\stats-scripts"
 New-Item -ItemType Directory -Path $scriptsDir -Force | Out-Null
 Copy-Item .\powershell\login.ps1 "$scriptsDir\login.ps1" -Force
+# 登录脚本同目录需放置软件注册表（运维手工维护，JSON 数组，UTF-8 无 BOM）
+Copy-Item .\powershell\software-registry.json "$scriptsDir\software-registry.json" -Force
 # 普通用户只读、不可篡改脚本；SYSTEM/Administrators 完全控制
 icacls $scriptsDir /inheritance:r /grant "*S-1-5-32-545:(OI)(CI)(RX)" "*S-1-5-18:(OI)(CI)F" "*S-1-5-32-544:(OI)(CI)F" | Out-Null
 # 所有用户登录时以本人身份执行（与 map-z/map-w-drive.cmd 同一启动目录）
@@ -206,12 +213,14 @@ $wrapper = Join-Path $startup "run-login.cmd"
 "@echo off`r`npowershell -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$scriptsDir\login.ps1`"" |
     Set-Content $wrapper -Encoding ASCII
 
-# 多机部署（独立文件服务器）时，才改用共享路径：
+# 多机部署（独立文件服务器）时，才改用共享路径（注册表同目录一并复制）：
 # Copy-Item .\powershell\login.ps1 \\fileserver\scripts\login.ps1
+# Copy-Item .\powershell\software-registry.json \\fileserver\scripts\software-registry.json
 ```
 
-> 登录脚本更新流程（本次 login.ps1 修改后必做）：在仓库目录 `git pull` 后重新执行上面第 ④ 步的
-> `Copy-Item ... C:\stats-scripts\login.ps1`，已登录用户**注销重新登录**一次生效。
+> 登录脚本 / 注册表更新流程（本次 login.ps1 或 software-registry.json 修改后必做）：在仓库目录 `git pull`
+> 后重新执行上面第 ④ 步的 `Copy-Item ... C:\stats-scripts\login.ps1`（若改了注册表，同时复制
+> `software-registry.json`），已登录用户**注销重新登录**一次生效。
 
 **生成物落点强制（保证各软件生成文件都在本人指定目录）：**
 
@@ -222,12 +231,28 @@ $wrapper = Join-Path $startup "run-login.cmd"
 | 重定向 | 登录时把**桌面/文档/下载**重定向到 `W:\Desktop` 等子目录（首次自动迁移存量文件），存到这些常见位置实际都进本人 W: 盘 | 所有软件 |
 | 隐藏盘符 | 普通用户资源管理器/标准"另存为"对话框隐藏并禁止访问 C:（管理员豁免；不影响软件运行，W:/Z: 网络盘不受限） | 所有软件 |
 | 位置栏 | 打开/另存为对话框左侧栏固定为 W: / 本人待导出目录 / Z: | 所有标准文件对话框 |
-| 启动目录 | R `Rprofile.site` 启动 `setwd("W:/")`；Stata `profile.do` 启动 `cd "W:/"`；快捷方式起始目录均为 W: | R / Stata / 快捷方式启动的软件 |
+| 启动目录 | 桌面快捷方式起始目录固定为 W:（按 `software-registry.json` 生成），软件打开即落在本人工作区 | 所有经桌面快捷方式启动的软件 |
 | 唯一出口 | 后端只回拉 `C:\pending\{用户}` 申请导出，落在其他位置的文件无导出渠道 | 平台规则 |
 
 > 通用 GUI 软件的"另存为"无法在应用层拦截，业界通行做法即"唯一可写位置 + 隐藏其他位置 + 出口管控"组合。`%TEMP%`/AppData 保持可写以确保软件正常运行；可选 `enforce-output-location.ps1 -HardenRootAcl` 进一步禁止普通用户在 `C:\` 根新建文件。
 >
-> **后续新软件接入清单**（无需改后端）：① 正常安装到 `C:\Program Files`；② 在 `login.ps1` 的 `$SoftwareConfigs` 表追加一条快捷方式（起始目录自动为 W:）；③ 若该软件有启动配置机制（类 Rprofile/profile.do），在 `enforce-output-location.ps1` 追加对应固化段并重跑；其余重定向/隐藏/位置栏/出口管控对它自动生效。
+> **后续新软件接入清单**（无需改后端）：① 正常安装到 `C:\Program Files`（或任意固定路径）；② 在 `powershell\software-registry.json` 追加一条登记项（起始目录自动为 W:）；③ 把注册表重新复制到 `C:\stats-scripts\`；④ 若该软件有专有的启动配置机制，参照 `enforce-output-location.ps1` 结构另行扩展并重跑一次。其余重定向/隐藏/位置栏/出口管控对它自动生效。
+
+#### 软件注册表（`powershell/software-registry.json`）
+
+桌面软件清单的唯一来源，由**运维手工维护**并把文件复制到登录脚本同目录（默认 `C:\stats-scripts\`），平台侧不建表、不提供管理界面、不下发该文件。
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `key` | string | 软件唯一标识（小写），供 `login.ps1 -Software <key>` 按名启动 |
+| `name` | string | 桌面快捷方式显示名（如 `SPSS`、`R`） |
+| `path` | string | 可执行文件绝对路径（JSON 中反斜杠需转义为 `\\`） |
+| `args` | string | 启动参数，无则填空字符串 `""` |
+
+- **文件位置**：与 `login.ps1` 同目录（`$PSScriptRoot\software-registry.json`）
+- **初始内容**：空数组 `[]`（表示暂无登记软件，登录脚本跳过快捷方式创建并输出告警）
+- **维护方式**：直接编辑仓库内的 `powershell/software-registry.json`，再按第 ④ 步复制到主机；登录脚本对缺失/解析失败做容错（仅告警，不中断登录）
+- **编码**：UTF-8 **无 BOM**（与带 BOM 的 `.ps1` 不同），登录脚本以 `Get-Content -Raw -Encoding UTF8` 读取
 
 **重要说明（无域环境）：**
 
@@ -407,11 +432,10 @@ uvicorn app.main:app --host 0.0.0.0 --port 8000
 | `RDS_HOST` | `8.133.223.251` | 否 | RDS 服务器地址（Windows 云主机 IP） |
 | `RDS_PORT` | `3389` | 否 | RDP 端口 |
 | `GUACAMOLE_URL` | `https://guac.chunjindevelop68.xyz/guacamole/#/client/` | 否 | Guacamole 前端地址 |
-| `RSTUDIO_PATH` | `C:\Program Files\RStudio\bin\rstudio.exe` | 否 | RStudio 安装路径 |
-| `MPLUS_PATH` | `C:\Program Files\Mplus\mplus.exe` | 否 | Mplus 安装路径 |
-| `STATA_PATH` | `C:\Program Files\Stata18\StataSE-64.exe` | 否 | Stata 安装路径 |
 
 > 环境变量名与 `config.py` 中字段名一一对应（大小写不敏感）。`.env` 已被 `.gitignore` 排除，不会提交到 git。
+>
+> 桌面软件清单不在环境变量中配置：统一由 Windows 端登录脚本同目录的 `software-registry.json` 维护（见上文「软件注册表」）。
 
 ## 演示账号
 
@@ -430,7 +454,7 @@ uvicorn app.main:app --host 0.0.0.0 --port 8000
 ## 工作流程
 
 ```
-用户登录 → 获取 JWT → 请求 /session/launch/rstudio
+用户登录 → 获取 JWT → 请求 /session/connect
                               ↓
               后端调 PowerShell 创建 RDS 会话
                               ↓
