@@ -186,7 +186,11 @@ $RegistryPath = Join-Path $PSScriptRoot 'software-registry.json'
 $SoftwareConfigs = @()
 if (Test-Path $RegistryPath) {
     try {
-        $SoftwareConfigs = @(Get-Content $RegistryPath -Raw -Encoding UTF8 | ConvertFrom-Json)
+        # 注意：PowerShell 5.1 的 ConvertFrom-Json 会把顶层数组当作单个对象输出，
+        # 若外面直接套 @(...)，会得到"1 个元素、元素本身是数组"的嵌套结构，
+        # 导致 $cfg 是整组数组、$cfg.path 返回 Object[]。必须先赋值给变量再展开。
+        $parsedRegistry = Get-Content $RegistryPath -Raw -Encoding UTF8 | ConvertFrom-Json
+        $SoftwareConfigs = @($parsedRegistry) | Where-Object { $_ -and $_.path }
     } catch {
         Write-Warning "软件注册表解析失败，本次跳过软件快捷方式创建：$($_.Exception.Message)"
     }
