@@ -146,39 +146,42 @@ class TestUpdateUserRole:
 # ============================================================
 
 class TestCli:
+    """CLI 函数注入测试会话：生产由函数自建 SessionLocal，测试共用 db_session
+    以保证写入落在测试事务内（独立会话会提交掉外层事务的 savepoint）。"""
+
     def test_promote_user(self, test_user, db_session):
-        assert promote("user1") == 0
+        assert promote("user1", db_session) == 0
         db_session.refresh(test_user)
         assert test_user.role == "superadmin"
 
     def test_promote_idempotent(self, test_superadmin, db_session, capsys):
-        assert promote("superadmin1") == 0
+        assert promote("superadmin1", db_session) == 0
         db_session.refresh(test_superadmin)
         assert test_superadmin.role == "superadmin"
         assert "已是超级管理员" in capsys.readouterr().out
 
-    def test_promote_nonexistent(self, capsys):
-        assert promote("no_such_user") == 1
+    def test_promote_nonexistent(self, db_session, capsys):
+        assert promote("no_such_user", db_session) == 1
         assert "不存在" in capsys.readouterr().err
 
     def test_promote_invalidates_old_token(self, client, test_user, db_session):
         old_token = create_access_token(test_user.id, test_user.username, "user")
-        promote("user1")
+        promote("user1", db_session)
         resp = client.get("/auth/me", headers={"Authorization": f"Bearer {old_token}"})
         assert resp.status_code == 401
 
     def test_demote_super(self, test_superadmin, db_session):
-        assert demote_super("superadmin1") == 0
+        assert demote_super("superadmin1", db_session) == 0
         db_session.refresh(test_superadmin)
         assert test_superadmin.role == "admin"
 
     def test_demote_non_super(self, test_user, db_session, capsys):
-        assert demote_super("user1") == 0
+        assert demote_super("user1", db_session) == 0
         db_session.refresh(test_user)
         assert test_user.role == "user"
 
     def test_cli_audit_log(self, test_user, db_session):
-        promote("user1")
+        promote("user1", db_session)
         log = db_session.query(AuditLog).filter(AuditLog.action == "cli_role_change").first()
         assert log is not None
         assert "server-cli" in log.detail

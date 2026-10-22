@@ -14,6 +14,8 @@
 import argparse
 import sys
 
+from sqlalchemy.orm import Session
+
 from app.database import SessionLocal
 from app.models import AuditLog, User
 
@@ -24,8 +26,11 @@ def _audit(db, user: User, detail: str) -> None:
     db.add(AuditLog(user_id=user.id, action="cli_role_change", detail=detail))
 
 
-def promote(username: str) -> int:
-    db = SessionLocal()
+def promote(username: str, db: Session | None = None) -> int:
+    """将用户提升为超级管理员。db 仅供测试注入，生产不传、由本函数自建会话。"""
+    own_session = db is None
+    if own_session:
+        db = SessionLocal()
     try:
         user = db.query(User).filter(User.username == username).first()
         if user is None:
@@ -43,11 +48,15 @@ def promote(username: str) -> int:
         print(f"OK: {username} 已提升为超级管理员（旧登录态已失效，需重新登录）")
         return 0
     finally:
-        db.close()
+        if own_session:
+            db.close()
 
 
-def demote_super(username: str) -> int:
-    db = SessionLocal()
+def demote_super(username: str, db: Session | None = None) -> int:
+    """将超级管理员降回管理员。db 仅供测试注入。"""
+    own_session = db is None
+    if own_session:
+        db = SessionLocal()
     try:
         user = db.query(User).filter(User.username == username).first()
         if user is None:
@@ -63,7 +72,8 @@ def demote_super(username: str) -> int:
         print(f"OK: {username} 已降级为管理员（旧登录态已失效，需重新登录）")
         return 0
     finally:
-        db.close()
+        if own_session:
+            db.close()
 
 
 def main() -> int:
