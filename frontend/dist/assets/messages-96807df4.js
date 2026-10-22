@@ -1,0 +1,1 @@
+import{J as e}from"./index-a37b5713.js";function t(){return e.get("/messages")}function r(s){return e.post(`/messages/${s}/read`)}function n(){return e.post("/messages/read-all")}function u(s){return e.post("/user/data-applies",s)}function p(){return e.get("/user/data-applies")}export{t as a,n as b,p as g,r as m,u as s};

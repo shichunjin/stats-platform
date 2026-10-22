@@ -85,7 +85,7 @@
           <el-table-column label="文件名" min-width="220" show-overflow-tooltip>
             <template #default="{ row }">{{ row.file_name }}</template>
           </el-table-column>
-          <el-table-column label="类型" width="100" />
+          <el-table-column prop="file_type" label="类型" width="100" />
           <el-table-column label="状态" width="110">
             <template #default="{ row }">
               <span class="status-cell">
