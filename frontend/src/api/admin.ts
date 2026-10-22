@@ -29,6 +29,15 @@ export function updateUserScopes(userId: number, dept_id: number | null, scope_i
   return request.put<unknown, User>(`/admin/users/${userId}/scopes`, { dept_id, scope_ids })
 }
 
+// ---- 用户角色管理（仅超级管理员） ----
+export function getManageUsers() {
+  return request.get<unknown, User[]>('/admin/manage/users')
+}
+
+export function updateUserRole(userId: number, role: 'user' | 'admin') {
+  return request.put<unknown, User>(`/admin/manage/users/${userId}/role`, { role })
+}
+
 // ---- 数据申请（前端模型，对应 mock） ----
 export function getDataApplies(status?: string) {
   return request.get<unknown, DataApply[]>('/admin/data-applies', { params: { status } })

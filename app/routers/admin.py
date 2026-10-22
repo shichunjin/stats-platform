@@ -7,7 +7,7 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session, joinedload
 from app.database import get_db
 from app.models import User, AuditLog, PendingFile, ExportResult, Scope, PlatformConfig
-from app.auth import get_current_user, require_admin
+from app.auth import get_current_user, require_admin, require_superadmin
 from app.config import settings
 from app.rate_limit import get_client_ip
 from app.review import file_sha256
@@ -537,3 +537,93 @@ def test_platform_connection(
     ))
     db.commit()
     raise HTTPException(status_code=502, detail=msg)
+
+
+# ============================================================
+# 用户角色管理（仅超级管理员）
+# ============================================================
+
+# 接口层允许的角色值白名单：superadmin 只能由服务器本地命令产生，
+# 任何 API 路径都不得创建/修改超级管理员。
+_MANAGEABLE_ROLES = ("user", "admin")
+
+
+class RoleUpdateRequest(BaseModel):
+    """变更用户角色的请求体"""
+    role: str
+
+
+@router.get("/manage/users", response_model=list[UserAdminOut],
+            summary="用户列表（角色管理）", description="""
+**查看全部用户及其角色（仅超级管理员）**
+
+用于「用户管理」页分配角色。数据权限分配仍走 `GET /admin/users` 与
+`PUT /admin/users/{id}/scopes`（管理员可用），两个页面职责分离。
+
+**错误码**
+- `401`：未认证
+- `403`：非超级管理员
+""")
+def list_users_for_manage(
+    admin: User = Depends(require_superadmin),
+    db: Session = Depends(get_db),
+):
+    return db.query(User).options(joinedload(User.scopes)).order_by(User.id).all()
+
+
+@router.put("/manage/users/{user_id}/role", response_model=UserAdminOut,
+            summary="变更用户角色", description="""
+**设置/取消管理员（仅超级管理员）**
+
+仅允许 `user` ↔ `admin` 双向调整：
+
+- 不允许把任何人设为 `superadmin`（超管只能由服务器本地命令 `python -m app.cli promote` 产生）
+- 不允许操作其他 `superadmin` 账号
+- 不允许修改自己的角色（防止误操作锁死）
+
+角色变更后目标用户的旧 JWT 立即失效（`password_version` +1），需重新登录获取新角色。
+
+**错误码**
+- `400`：目标角色非法 / 操作超级管理员 / 修改自己
+- `401`：未认证
+- `403`：非超级管理员
+- `404`：用户不存在
+""")
+def update_user_role(
+    user_id: int,
+    req: RoleUpdateRequest,
+    request: Request,
+    admin: User = Depends(require_superadmin),
+    db: Session = Depends(get_db),
+):
+    new_role = (req.role or "").strip()
+    if new_role not in _MANAGEABLE_ROLES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"角色仅允许设为 {'/'.join(_MANAGEABLE_ROLES)}（superadmin 只能由服务器命令创建）",
+        )
+    if user_id == admin.id:
+        raise HTTPException(status_code=400, detail="不能修改自己的角色")
+
+    user = db.query(User).options(joinedload(User.scopes)).filter(User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="用户不存在")
+    if user.role == "superadmin":
+        raise HTTPException(status_code=400, detail="超级管理员账号只能由服务器本地命令管理")
+    if user.role == new_role:
+        return user  # 幂等：角色未变化
+
+    old_role = user.role
+    user.role = new_role
+    # 复用改密失效机制：角色变化后旧 token（带旧 role claim）立即作废
+    user.password_version = (user.password_version or 1) + 1
+
+    db.add(AuditLog(
+        user_id=admin.id,
+        action="update_user_role",
+        detail=f"将用户 {user.username}(id={user_id}) 的角色由 {old_role} 变更为 {new_role}",
+        ip_addr=get_client_ip(request),
+    ))
+    db.commit()
+    db.refresh(user)
+    return user

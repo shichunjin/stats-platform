@@ -8,7 +8,9 @@ export const useUserStore = defineStore('user', () => {
   const user = ref<User | null>(null)
 
   const isLoggedIn = computed(() => !!token.value)
-  const isAdmin = computed(() => user.value?.role === 'admin')
+  // 超级管理员天然拥有全部管理员页面
+  const isAdmin = computed(() => user.value?.role === 'admin' || user.value?.role === 'superadmin')
+  const isSuperAdmin = computed(() => user.value?.role === 'superadmin')
 
   async function login(username: string, password: string) {
     const res = await apiLogin(username, password)
@@ -27,5 +29,5 @@ export const useUserStore = defineStore('user', () => {
     localStorage.removeItem('access_token')
   }
 
-  return { token, user, isLoggedIn, isAdmin, login, fetchUser, logout }
+  return { token, user, isLoggedIn, isAdmin, isSuperAdmin, login, fetchUser, logout }
 })

@@ -199,6 +199,34 @@ def admin_headers(admin_token):
     return {"Authorization": f"Bearer {admin_token}"}
 
 
+@pytest.fixture
+def test_superadmin(db_session, test_scope):
+    """创建测试超级管理员"""
+    user = User(
+        username="superadmin1",
+        display_name="超级管理员",
+        dept_id=test_scope.id,
+        role="superadmin",
+        is_active=True,
+    )
+    db_session.add(user)
+    db_session.commit()
+    db_session.refresh(user)
+    return user
+
+
+@pytest.fixture
+def superadmin_token(test_superadmin):
+    """超级管理员 JWT Token"""
+    return create_access_token(test_superadmin.id, test_superadmin.username, "superadmin")
+
+
+@pytest.fixture
+def superadmin_headers(superadmin_token):
+    """超级管理员认证请求头"""
+    return {"Authorization": f"Bearer {superadmin_token}"}
+
+
 @pytest.fixture(autouse=True)
 def _no_remote_pending_pull(monkeypatch):
     """默认禁止「申请导出」真实 SFTP 回拉 Windows 待导出目录。

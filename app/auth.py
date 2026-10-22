@@ -20,7 +20,7 @@ oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/auth/login", auto_error=False)
 
 # 演示账号元数据（用户名 -> (显示名, 角色)）
 DEMO_ACCOUNTS = {
-    "admin": ("管理员", "admin"),
+    "admin": ("超级管理员", "superadmin"),
     "user1": ("测试用户1", "user"),
 }
 
@@ -156,6 +156,13 @@ def get_current_user(
 
 
 def require_admin(user: User = Depends(get_current_user)) -> User:
-    if user.role != "admin":
+    # 超级管理员天然拥有全部管理员权限
+    if user.role not in ("admin", "superadmin"):
         raise HTTPException(status_code=403, detail="需要管理员权限")
+    return user
+
+
+def require_superadmin(user: User = Depends(get_current_user)) -> User:
+    if user.role != "superadmin":
+        raise HTTPException(status_code=403, detail="需要超级管理员权限")
     return user

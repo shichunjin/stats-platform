@@ -73,7 +73,7 @@
               <el-avatar :size="30">{{ userStore.user?.display_name?.[0] || userStore.user?.username?.[0] }}</el-avatar>
               <span class="username">{{ userStore.user?.display_name || userStore.user?.username }}</span>
               <el-tag :type="userStore.isAdmin ? 'danger' : 'info'" size="small" style="margin-left: 6px">
-                {{ userStore.isAdmin ? '管理员' : '用户' }}
+                {{ userStore.isSuperAdmin ? '超级管理员' : userStore.isAdmin ? '管理员' : '用户' }}
               </el-tag>
             </span>
             <template #dropdown>
@@ -143,7 +143,8 @@ const activeMenu = computed(() => route.path)
 const currentTitle = computed(() => (route.meta?.title as string) || '首页')
 
 // 根据角色过滤菜单
-// 约束：管理员端导航只允许出现 6 个菜单项，不得新增其他菜单
+// 约束：admin 角色导航固定 6 个菜单项，不得新增；
+// superadmin 在此基础上追加「用户管理」（角色分配，仅超管可见）
 const menuList = computed(() => {
   const adminMenu = [
     { path: '/admin/pending-data', title: '待处理数据申请', icon: 'List' },
@@ -153,13 +154,17 @@ const menuList = computed(() => {
     { path: '/admin/platform-config', title: '连接数据分析PC', icon: 'Connection' },
     { path: '/admin/audit', title: '审计日志', icon: 'DocumentCopy' },
   ]
+  const superOnlyMenu = [
+    { path: '/admin/user-manage', title: '用户管理', icon: 'Avatar' },
+  ]
   const userMenu = [
     { path: '/user/data-request', title: '申请获取数据', icon: 'Download' },
     { path: '/user/my-requests', title: '我的申请记录', icon: 'Document' },
     { path: '/user/my-results', title: '我的结果文件', icon: 'FolderOpened' },
     { path: '/user/messages', title: '消息中心', icon: 'Bell' },
   ]
-  return userStore.isAdmin ? adminMenu : userMenu
+  if (!userStore.isAdmin) return userMenu
+  return userStore.isSuperAdmin ? [...adminMenu, ...superOnlyMenu] : adminMenu
 })
 
 onMounted(() => {

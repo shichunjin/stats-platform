@@ -60,7 +60,7 @@ class UserOut(BaseModel):
     id: int = Field(..., description="用户 ID")
     username: str = Field(..., description="用户名")
     display_name: Optional[str] = Field(None, description="显示名称")
-    role: str = Field(..., description="角色：user=普通用户 / admin=管理员")
+    role: str = Field(..., description="角色：user=普通用户 / admin=管理员 / superadmin=超级管理员")
     dept: Optional[ScopeOut] = Field(None, description="所属部门信息")
     scopes: List[ScopeOut] = Field(default_factory=list, description="可访问的数据范围列表")
 
@@ -127,7 +127,7 @@ class UserAdminOut(BaseModel):
     id: int = Field(..., description="用户 ID")
     username: str = Field(..., description="用户名")
     display_name: Optional[str] = Field(None, description="显示名称")
-    role: str = Field(..., description="角色：user=普通用户 / admin=管理员")
+    role: str = Field(..., description="角色：user=普通用户 / admin=管理员 / superadmin=超级管理员")
     is_active: bool = Field(..., description="账号是否启用")
     dept_id: Optional[int] = Field(None, description="所属部门范围 ID")
     dept: Optional[ScopeOut] = Field(None, description="所属部门信息")

@@ -18,13 +18,16 @@ const routes: RouteRecordRaw[] = [
       { path: 'user/my-results', name: 'MyResults', component: () => import('@/views/user/MyResults.vue'), meta: { title: '我的结果文件', icon: 'FolderOpened', roles: ['user', 'admin'] } },
       { path: 'user/messages', name: 'Messages', component: () => import('@/views/user/Messages.vue'), meta: { title: '消息中心', icon: 'Bell', roles: ['user', 'admin'] } },
 
-      // ---- 管理员端 ----
-      { path: 'admin/pending-data', name: 'PendingData', component: () => import('@/views/admin/PendingData.vue'), meta: { title: '待处理数据申请', icon: 'List', roles: ['admin'] } },
-      { path: 'admin/data-filter', name: 'DataFilter', component: () => import('@/views/admin/DataFilter.vue'), meta: { title: '数据筛选与生成', icon: 'Filter', roles: ['admin'] } },
-      { path: 'admin/pending-exports', name: 'PendingExports', component: () => import('@/views/admin/PendingExports.vue'), meta: { title: '待审核导出申请', icon: 'Checked', roles: ['admin'] } },
-      { path: 'admin/user-scopes', name: 'UserScopes', component: () => import('@/views/admin/UserScopes.vue'), meta: { title: '用户数据权限', icon: 'UserFilled', roles: ['admin'] } },
-      { path: 'admin/platform-config', name: 'PlatformConfig', component: () => import('@/views/admin/PlatformConfig.vue'), meta: { title: '连接数据分析PC', icon: 'Connection', roles: ['admin'] } },
-      { path: 'admin/audit', name: 'AuditLog', component: () => import('@/views/admin/AuditLog.vue'), meta: { title: '审计日志', icon: 'DocumentCopy', roles: ['admin'] } },
+      // ---- 管理员端（superadmin 继承全部管理员页面） ----
+      { path: 'admin/pending-data', name: 'PendingData', component: () => import('@/views/admin/PendingData.vue'), meta: { title: '待处理数据申请', icon: 'List', roles: ['admin', 'superadmin'] } },
+      { path: 'admin/data-filter', name: 'DataFilter', component: () => import('@/views/admin/DataFilter.vue'), meta: { title: '数据筛选与生成', icon: 'Filter', roles: ['admin', 'superadmin'] } },
+      { path: 'admin/pending-exports', name: 'PendingExports', component: () => import('@/views/admin/PendingExports.vue'), meta: { title: '待审核导出申请', icon: 'Checked', roles: ['admin', 'superadmin'] } },
+      { path: 'admin/user-scopes', name: 'UserScopes', component: () => import('@/views/admin/UserScopes.vue'), meta: { title: '用户数据权限', icon: 'UserFilled', roles: ['admin', 'superadmin'] } },
+      { path: 'admin/platform-config', name: 'PlatformConfig', component: () => import('@/views/admin/PlatformConfig.vue'), meta: { title: '连接数据分析PC', icon: 'Connection', roles: ['admin', 'superadmin'] } },
+      { path: 'admin/audit', name: 'AuditLog', component: () => import('@/views/admin/AuditLog.vue'), meta: { title: '审计日志', icon: 'DocumentCopy', roles: ['admin', 'superadmin'] } },
+
+      // ---- 超级管理员专属 ----
+      { path: 'admin/user-manage', name: 'UserManage', component: () => import('@/views/admin/UserManage.vue'), meta: { title: '用户管理', icon: 'Avatar', roles: ['superadmin'] } },
     ],
   },
   { path: '/:pathMatch(.*)*', redirect: '/dashboard' },

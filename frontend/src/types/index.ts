@@ -9,7 +9,7 @@ export interface ApiResp<T = unknown> {
   message?: string
 }
 
-export type UserRole = 'admin' | 'user'
+export type UserRole = 'admin' | 'user' | 'superadmin'
 
 // ---- 认证 / 用户 ----
 export interface User {

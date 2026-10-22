@@ -59,6 +59,18 @@ def _migrate_schema():
         if "software" in cols:
             _drop_sessions_software_column(insp)
 
+    # 角色三档化：内置 admin 账号提升为超级管理员（幂等）。
+    # 仅匹配 username='admin' 且当前为 admin 的行，其他管理员不受影响。
+    if "users" in insp.get_table_names():
+        with engine.connect() as conn:
+            res = conn.execute(text(
+                "UPDATE users SET role='superadmin' "
+                "WHERE username='admin' AND role='admin'"
+            ))
+            conn.commit()
+        if res.rowcount:
+            logger.info("已迁移: 内置 admin 账号提升为 superadmin")
+
 
 def _drop_sessions_software_column(insp):
     """移除 sessions.software 列（软件维度下线，幂等）。
