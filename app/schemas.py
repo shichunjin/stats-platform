@@ -44,16 +44,6 @@ class ChangePasswordRequest(BaseModel):
 
 
 # ---- User ----
-class ScopeOut(BaseModel):
-    model_config = ConfigDict(from_attributes=True)
-
-    id: int = Field(..., description="数据范围 ID")
-    scope_code: str = Field(..., description="数据范围编码（如 dept_1）")
-    scope_type: str = Field(..., description="范围类型：dept=部门 / project=项目")
-    scope_name: str = Field(..., description="范围名称（如：研发部）")
-    data_path: str = Field(..., description="数据目录绝对路径")
-
-
 class UserOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -61,8 +51,6 @@ class UserOut(BaseModel):
     username: str = Field(..., description="用户名")
     display_name: Optional[str] = Field(None, description="显示名称")
     role: str = Field(..., description="角色：user=普通用户 / admin=管理员 / superadmin=超级管理员")
-    dept: Optional[ScopeOut] = Field(None, description="所属部门信息")
-    scopes: List[ScopeOut] = Field(default_factory=list, description="可访问的数据范围列表")
 
 
 # ---- Session ----
@@ -112,11 +100,6 @@ class AuditLogOut(BaseModel):
 
 
 # ---- Admin ----
-class ScopeAssignRequest(BaseModel):
-    dept_id: Optional[int] = Field(None, description="所属部门（范围）ID，可为空")
-    scope_ids: List[int] = Field(default_factory=list, description="可访问的项目范围 ID 列表")
-
-
 class ExportReviewRequest(BaseModel):
     reason: Optional[str] = Field(None, description="审核意见（拒绝时建议填写原因）")
 
@@ -129,9 +112,6 @@ class UserAdminOut(BaseModel):
     display_name: Optional[str] = Field(None, description="显示名称")
     role: str = Field(..., description="角色：user=普通用户 / admin=管理员 / superadmin=超级管理员")
     is_active: bool = Field(..., description="账号是否启用")
-    dept_id: Optional[int] = Field(None, description="所属部门范围 ID")
-    dept: Optional[ScopeOut] = Field(None, description="所属部门信息")
-    scopes: List[ScopeOut] = Field(default_factory=list, description="可访问的数据范围列表")
     created_at: Optional[datetime] = Field(None, description="注册时间")
 
 

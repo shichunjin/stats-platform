@@ -22,7 +22,6 @@ const routes: RouteRecordRaw[] = [
       { path: 'admin/pending-data', name: 'PendingData', component: () => import('@/views/admin/PendingData.vue'), meta: { title: '待处理数据申请', icon: 'List', roles: ['admin', 'superadmin'] } },
       { path: 'admin/data-filter', name: 'DataFilter', component: () => import('@/views/admin/DataFilter.vue'), meta: { title: '数据筛选与生成', icon: 'Filter', roles: ['admin', 'superadmin'] } },
       { path: 'admin/pending-exports', name: 'PendingExports', component: () => import('@/views/admin/PendingExports.vue'), meta: { title: '待审核导出申请', icon: 'Checked', roles: ['admin', 'superadmin'] } },
-      { path: 'admin/user-scopes', name: 'UserScopes', component: () => import('@/views/admin/UserScopes.vue'), meta: { title: '用户数据权限', icon: 'UserFilled', roles: ['admin', 'superadmin'] } },
       { path: 'admin/platform-config', name: 'PlatformConfig', component: () => import('@/views/admin/PlatformConfig.vue'), meta: { title: '连接数据分析PC', icon: 'Connection', roles: ['admin', 'superadmin'] } },
       { path: 'admin/audit', name: 'AuditLog', component: () => import('@/views/admin/AuditLog.vue'), meta: { title: '审计日志', icon: 'DocumentCopy', roles: ['admin', 'superadmin'] } },
 

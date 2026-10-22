@@ -7,7 +7,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
 from app.routers import auth, session, results, admin, data, messages, applies
 from app.database import Base, engine, SessionLocal
-from app.models import User, Scope, AuditLog
+from app.models import User, AuditLog
 from app.auth import DEMO_ACCOUNTS, DEMO_USERS
 from app.config import settings
 from app.guac import guac_sync_enabled, upsert_guac_user
@@ -131,22 +131,9 @@ _migrate_schema()
 
 
 def _init_demo_data():
-    """初始化演示账号和默认部门（仅在不存在时创建）"""
+    """初始化演示账号（仅在不存在时创建）"""
     db = SessionLocal()
     try:
-        # 默认部门
-        scope = db.query(Scope).filter(Scope.scope_code == "dept_default").first()
-        if scope is None:
-            scope = Scope(
-                scope_code="dept_default",
-                scope_type="dept",
-                scope_name="默认部门",
-                data_path=r"\\fileserver\data\dept_default",
-            )
-            db.add(scope)
-            db.commit()
-            db.refresh(scope)
-
         # 演示账号（仅创建已配置密码的账号）
         for username, (display_name, role) in DEMO_ACCOUNTS.items():
             if username not in DEMO_USERS:
@@ -155,7 +142,6 @@ def _init_demo_data():
                 db.add(User(
                     username=username,
                     display_name=display_name,
-                    dept_id=scope.id,
                     role=role,
                     is_active=True,
                     # 演示账号不用 password_hash，登录时用 DEMO_USERS 字典校验

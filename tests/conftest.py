@@ -50,7 +50,7 @@ settings.dataset_csv_path = os.path.join(
     os.environ["FILESERVER_ROOT"], "__missing_baseline__.csv")
 
 from app.database import Base, get_db
-from app.models import User, Scope, AuditLog
+from app.models import User, AuditLog
 from app.auth import create_access_token, DEMO_USERS
 from app.main import app
 
@@ -112,32 +112,14 @@ def client(db_session):
 
 
 @pytest.fixture
-def test_scope(db_session):
-    """创建测试数据范围"""
-    scope = Scope(
-        scope_code="dept_1",
-        scope_type="dept",
-        scope_name="测试部门",
-        data_path=os.path.join(settings.fileserver_root, "data", "dept_1"),
-    )
-    db_session.add(scope)
-    db_session.commit()
-    db_session.refresh(scope)
-    return scope
-
-
-@pytest.fixture
-def test_user(db_session, test_scope):
-    """创建测试普通用户（默认持有 test_scope 数据权限——B7 修复后，
-    无 scopes 的用户将被拒绝生成/导出；需验证门禁的用例改用 test_user_no_scope）"""
+def test_user(db_session):
+    """创建测试普通用户"""
     user = User(
         username="user1",
         display_name="测试用户1",
-        dept_id=test_scope.id,
         role="user",
         is_active=True,
     )
-    user.scopes = [test_scope]
     db_session.add(user)
     db_session.commit()
     db_session.refresh(user)
@@ -145,11 +127,11 @@ def test_user(db_session, test_scope):
 
 
 @pytest.fixture
-def test_user_no_scope(db_session):
-    """创建无数据权限（scopes 为空）的测试用户，用于验证 B7 权限门禁"""
+def test_user2(db_session):
+    """第二个测试普通用户（用于跨用户隔离类测试）"""
     user = User(
-        username="user_noscope",
-        display_name="无权限用户",
+        username="user2",
+        display_name="测试用户2",
         role="user",
         is_active=True,
     )
@@ -160,12 +142,11 @@ def test_user_no_scope(db_session):
 
 
 @pytest.fixture
-def test_admin(db_session, test_scope):
+def test_admin(db_session):
     """创建测试管理员"""
     user = User(
         username="admin",
         display_name="管理员",
-        dept_id=test_scope.id,
         role="admin",
         is_active=True,
     )
@@ -200,12 +181,11 @@ def admin_headers(admin_token):
 
 
 @pytest.fixture
-def test_superadmin(db_session, test_scope):
+def test_superadmin(db_session):
     """创建测试超级管理员"""
     user = User(
         username="superadmin1",
         display_name="超级管理员",
-        dept_id=test_scope.id,
         role="superadmin",
         is_active=True,
     )

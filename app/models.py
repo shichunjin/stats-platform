@@ -2,27 +2,10 @@
 from datetime import datetime
 from sqlalchemy import (
     Column, Integer, String, Text, BigInteger, Boolean, DateTime, ForeignKey,
-    Table, JSON
+    JSON
 )
 from sqlalchemy.orm import relationship
 from app.database import Base
-
-# 用户-范围关联
-user_scope = Table(
-    "user_scope", Base.metadata,
-    Column("user_id", Integer, ForeignKey("users.id", ondelete="CASCADE"), primary_key=True),
-    Column("scope_id", Integer, ForeignKey("scopes.id", ondelete="CASCADE"), primary_key=True),
-)
-
-
-class Scope(Base):
-    __tablename__ = "scopes"
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    scope_code = Column(String(64), unique=True, nullable=False)
-    scope_type = Column(String(16), nullable=False)   # dept | project
-    scope_name = Column(String(128), nullable=False)
-    data_path = Column(String(256), nullable=False)
-    created_at = Column(DateTime, default=datetime.utcnow)
 
 
 class User(Base):
@@ -31,15 +14,11 @@ class User(Base):
     username = Column(String(64), unique=True, nullable=False)
     ad_sid = Column(String(128))
     display_name = Column(String(128))
-    dept_id = Column(Integer, ForeignKey("scopes.id"))
-    role = Column(String(16), default="user")        # user | admin
+    role = Column(String(16), default="user")        # user | admin | superadmin
     is_active = Column(Boolean, default=True)
     password_hash = Column(String(256), nullable=True)  # 注册用户密码哈希（演示账号为空）
     password_version = Column(Integer, default=1)       # 改密递增，用于 JWT 失效
     created_at = Column(DateTime, default=datetime.utcnow)
-
-    dept = relationship("Scope", foreign_keys=[dept_id])
-    scopes = relationship("Scope", secondary=user_scope, backref="users")
 
 
 class Session(Base):

@@ -20,9 +20,6 @@
             </span>
           </template>
         </el-table-column>
-        <el-table-column label="数据权限数" width="100" align="center">
-          <template #default="{ row }">{{ (row.scopes || []).length }}</template>
-        </el-table-column>
         <el-table-column label="操作" width="150" fixed="right">
           <template #default="{ row }">
             <el-button

@@ -151,22 +151,6 @@ def request_export(
 ):
     client_ip = get_client_ip(request)
 
-    # 安全修复 B7：scopes 权限消费——未分配数据权限的用户禁止申请导出，
-    # 防止权限被吊销后结果外带；管理员不受此限（其本身拥有全部管理接口权限）。
-    if user.role != "admin" and not user.scopes:
-        db.add(AuditLog(
-            user_id=user.id,
-            action="export_requested",
-            detail="导出申请被拒绝（未分配数据权限 scopes）",
-            status="failed",
-            ip_addr=client_ip,
-        ))
-        db.commit()
-        raise HTTPException(
-            status_code=403,
-            detail="您尚未被分配数据权限，无法申请导出，请联系管理员在「用户数据权限」中分配",
-        )
-
     pending_dir = _user_pending_dir(user.id)
 
     # 先把用户在 Windows 待导出目录里的结果回拉到服务器（目录键为用户名）

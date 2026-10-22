@@ -84,7 +84,6 @@ const MODULE_MAP: Record<string, string> = {
   data_generate: '数据筛选与生成', data_import: '数据筛选与生成',
   export_requested: '导出审核', export_approved: '导出审核', export_rejected: '导出审核',
   result_download: '结果文件', result_download_expired: '结果文件',
-  assign_scopes: '用户数据权限',
   platform_test: '连接数据分析PC',
 }
 const moduleOf = (action: string) => MODULE_MAP[action] || '其他'

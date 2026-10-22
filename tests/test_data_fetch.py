@@ -1,4 +1,4 @@
-"""数据投递通道回归测试（安全修复 A1 后）。
+﻿"""数据投递通道回归测试（安全修复 A1 后）。
 
 修复内容：
 - /data/fetch 已停用：任何登录用户直接拉取全量宽表都返回 403，
@@ -32,13 +32,9 @@ def _inline_jobs(monkeypatch, db_session):
     monkeypatch.setattr(jobs, "submit_generate", _inline)
 
 
-def _make_user(db_session, scope, username: str, role: str = "user", with_scope: bool = True):
-    user = User(username=username, display_name=username, dept_id=scope.id,
+def _make_user(db_session, username: str, role: str = "user"):
+    user = User(username=username, display_name=username,
                 role=role, is_active=True)
-    # B7 修复后，无 scopes 的用户会被拒绝生成；默认赋予测试范围，
-    # 需验证门禁的用例传 with_scope=False
-    if with_scope:
-        user.scopes = [scope]
     db_session.add(user)
     db_session.commit()
     db_session.refresh(user)
@@ -93,10 +89,9 @@ def _create_apply(db_session, user_id: int, status: str = "pending") -> DataAppl
     return apply_obj
 
 
-def test_generate_requires_apply_id(client, admin_headers, db_session,
-                                    test_scope, monkeypatch):
+def test_generate_requires_apply_id(client, admin_headers, db_session, monkeypatch):
     _patch_filtered_generator(monkeypatch)
-    target, _ = _make_user(db_session, test_scope, "gen_user")
+    target, _ = _make_user(db_session, "gen_user")
 
     resp = client.post("/data/generate", headers=admin_headers, json={
         "target_user_id": target.id,
@@ -107,12 +102,11 @@ def test_generate_requires_apply_id(client, admin_headers, db_session,
     assert "申请" in resp.json()["detail"]
 
 
-def test_generate_rejects_apply_of_other_user(client, admin_headers, db_session,
-                                              test_scope, monkeypatch):
+def test_generate_rejects_apply_of_other_user(client, admin_headers, db_session, monkeypatch):
     """申请必须属于目标用户，不能拿他人申请冒名生成"""
     _patch_filtered_generator(monkeypatch)
-    target, _ = _make_user(db_session, test_scope, "gen_target")
-    other, _ = _make_user(db_session, test_scope, "gen_other")
+    target, _ = _make_user(db_session, "gen_target")
+    other, _ = _make_user(db_session, "gen_other")
     apply_obj = _create_apply(db_session, other.id)
 
     resp = client.post("/data/generate", headers=admin_headers, json={
@@ -124,11 +118,10 @@ def test_generate_rejects_apply_of_other_user(client, admin_headers, db_session,
     assert resp.status_code == 400
 
 
-def test_generate_rejects_finished_apply(client, admin_headers, db_session,
-                                         test_scope, monkeypatch):
+def test_generate_rejects_finished_apply(client, admin_headers, db_session, monkeypatch):
     """已完成的申请不可重复生成"""
     _patch_filtered_generator(monkeypatch)
-    target, _ = _make_user(db_session, test_scope, "gen_done")
+    target, _ = _make_user(db_session, "gen_done")
     apply_obj = _create_apply(db_session, target.id, status="completed")
 
     resp = client.post("/data/generate", headers=admin_headers, json={
@@ -141,12 +134,12 @@ def test_generate_rejects_finished_apply(client, admin_headers, db_session,
 
 
 def test_generate_with_valid_apply_completes_and_delivers(
-        client, admin_headers, db_session, test_scope, monkeypatch):
+        client, admin_headers, db_session, monkeypatch):
     """有效申请：生成成功 → 申请置为 completed → 投递到目标用户私有目录并锁定"""
     uploaded = []
     _patch_filtered_generator(monkeypatch)
     _patch_upload(monkeypatch, uploaded)
-    target, _ = _make_user(db_session, test_scope, "gen_ok")
+    target, _ = _make_user(db_session, "gen_ok")
     apply_obj = _create_apply(db_session, target.id, status="pending")
 
     resp = client.post("/data/generate", headers=admin_headers, json={
@@ -170,11 +163,10 @@ def test_generate_with_valid_apply_completes_and_delivers(
     assert lock_owner == "gen_ok"
 
 
-def test_generate_rejects_rejected_apply(client, admin_headers, db_session,
-                                         test_scope, monkeypatch):
+def test_generate_rejects_rejected_apply(client, admin_headers, db_session, monkeypatch):
     """被拒绝的申请不可生成"""
     _patch_filtered_generator(monkeypatch)
-    target, _ = _make_user(db_session, test_scope, "gen_rej")
+    target, _ = _make_user(db_session, "gen_rej")
     apply_obj = _create_apply(db_session, target.id, status="rejected")
 
     resp = client.post("/data/generate", headers=admin_headers, json={
@@ -186,36 +178,12 @@ def test_generate_rejects_rejected_apply(client, admin_headers, db_session,
     assert resp.status_code == 400
 
 
-# ---- scopes 权限消费（B7） ----
-
-def test_generate_rejects_scopeless_user(client, admin_headers, db_session,
-                                         test_scope, monkeypatch):
-    """安全修复 B7：目标用户未分配 scopes 时拒绝生成（无 scope 拒绝取数）"""
-    _patch_filtered_generator(monkeypatch)
-    target, _ = _make_user(db_session, test_scope, "gen_noscope", with_scope=False)
-    apply_obj = _create_apply(db_session, target.id, status="pending")
-
-    resp = client.post("/data/generate", headers=admin_headers, json={
-        "target_user_id": target.id,
-        "filters": {"sex33": 1},
-        "filename": "subset.xlsx",
-        "apply_id": apply_obj.id,
-    })
-    assert resp.status_code == 400
-    assert "权限" in resp.json()["detail"]
-
-    # 申请状态不得被推进
-    db_session.refresh(apply_obj)
-    assert apply_obj.status == "pending"
-
-
 # ---- 生成异步化（C1） ----
 
-def test_generate_async_submission_marks_generating(client, admin_headers, db_session,
-                                                    test_scope, monkeypatch):
+def test_generate_async_submission_marks_generating(client, admin_headers, db_session, monkeypatch):
     """C1：接口认领后立即返回，申请进入 generating（后台任务不阻塞请求线程）"""
     _patch_filtered_generator(monkeypatch)
-    target, _ = _make_user(db_session, test_scope, "gen_async")
+    target, _ = _make_user(db_session, "gen_async")
     apply_obj = _create_apply(db_session, target.id, status="pending")
 
     # 覆盖 autouse 内联执行器：只接收任务不执行，验证「提交即返回」语义
@@ -236,10 +204,9 @@ def test_generate_async_submission_marks_generating(client, admin_headers, db_se
     assert apply_obj.processed_by is not None
 
 
-def test_generate_failure_marks_failed_and_retryable(client, admin_headers, db_session,
-                                                     test_scope, monkeypatch):
+def test_generate_failure_marks_failed_and_retryable(client, admin_headers, db_session, monkeypatch):
     """C1：后台生成失败 → 申请置 failed 并记录原因；管理员可从 failed 重试成功"""
-    target, _ = _make_user(db_session, test_scope, "gen_fail")
+    target, _ = _make_user(db_session, "gen_fail")
     apply_obj = _create_apply(db_session, target.id, status="pending")
 
     def boom(db, table_name, out_path, filters):
@@ -276,11 +243,10 @@ def test_generate_failure_marks_failed_and_retryable(client, admin_headers, db_s
     assert uploaded[-1][2] == "subset.xlsx"
 
 
-def test_generate_inflight_conflict_409(client, admin_headers, db_session,
-                                        test_scope, monkeypatch):
+def test_generate_inflight_conflict_409(client, admin_headers, db_session, monkeypatch):
     """C1：同一申请已有任务在跑时，重复提交返回 409（防双击/重试风暴）"""
     _patch_filtered_generator(monkeypatch)
-    target, _ = _make_user(db_session, test_scope, "gen_dup")
+    target, _ = _make_user(db_session, "gen_dup")
     apply_obj = _create_apply(db_session, target.id, status="pending")
 
     # 模拟执行器拒绝（任务在跑）
@@ -298,13 +264,12 @@ def test_generate_inflight_conflict_409(client, admin_headers, db_session,
 # ---- 平台配置落库消费（C4） ----
 
 def test_generate_uses_platform_config_workspace_dir(client, admin_headers,
-                                                     db_session, test_scope,
-                                                     monkeypatch):
+                                                     db_session, monkeypatch):
     """C4：投递根目录优先取平台配置库中的 workspace_dir（管理端保存即生效）"""
     uploaded = []
     _patch_filtered_generator(monkeypatch)
     _patch_upload(monkeypatch, uploaded)
-    target, _ = _make_user(db_session, test_scope, "gen_cfg")
+    target, _ = _make_user(db_session, "gen_cfg")
     apply_obj = _create_apply(db_session, target.id, status="pending")
 
     # 管理端「连接数据分析PC」保存：workspace_dir 落库（host 置空跳过白名单校验）
@@ -324,3 +289,5 @@ def test_generate_uses_platform_config_workspace_dir(client, admin_headers,
 
     _local, remote_dir, _name, _lock = uploaded[-1]
     assert remote_dir == "D:/cfg_workspace/gen_cfg"
+
+

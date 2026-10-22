@@ -17,22 +17,11 @@ export interface User {
   username: string
   display_name?: string | null
   role: UserRole
-  dept?: Scope | null
-  scopes: Scope[]
 }
 
 export interface TokenResponse {
   access_token: string
   token_type: string
-}
-
-// ---- 数据范围 ----
-export interface Scope {
-  id: number
-  scope_code: string
-  scope_type: 'dept' | 'project'
-  scope_name: string
-  data_path: string
 }
 
 // ---- 会话 ----

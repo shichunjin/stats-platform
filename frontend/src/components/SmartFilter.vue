@@ -99,85 +99,94 @@
         </el-col>
       </el-row>
 
-      <!-- 其余条件放入折叠区域，默认不展开 -->
-      <el-collapse v-if="moreColumns.length" v-model="expanded" class="more-collapse">
-        <el-collapse-item :title="`更多筛选条件（${moreColumns.length}）`" name="more">
-          <el-row :gutter="16">
-            <el-col v-for="col in moreColumns" :key="col.name" :span="8">
-              <el-form-item>
-                <template #label>
-                  <span class="field-label">
-                    <span class="field-name">{{ col.name }}</span>
-                    <span class="field-type" :class="`field-type--${col.control}`">{{ typeLabel(col.control) }}</span>
-                  </span>
-                </template>
-                <el-select
-                  v-if="col.control === 'select'"
-                  v-model="model[col.name]"
-                  placeholder="请选择"
-                  filterable
-                  clearable
-                  multiple
-                  collapse-tags
-                  collapse-tags-tooltip
-                  style="width: 100%"
-                  @change="emitChange"
-                >
-                  <el-option v-for="opt in col.options" :key="opt" :label="String(opt)" :value="opt" />
-                </el-select>
+      <!-- 更多筛选条件：显眼的大号展开/收起按钮 -->
+      <div v-if="moreColumns.length" class="more-toggle-wrap">
+        <el-button type="primary" plain size="large" class="more-toggle" @click="toggleMore">
+          {{ expanded ? '收起更多筛选条件' : `展开更多筛选条件（${moreColumns.length}）` }}
+          <el-icon style="margin-left: 4px">
+            <ArrowDown v-if="!expanded" />
+            <ArrowUp v-else />
+          </el-icon>
+        </el-button>
+      </div>
 
-                <div v-else-if="col.control === 'range'" class="range-box">
-                  <el-input-number
-                    v-model="rangeMin[col.name]"
-                    :min="col.min"
-                    :max="col.max"
-                    placeholder="最小"
-                    controls-position="right"
-                    style="width: 50%"
-                    @change="onRangeChange(col.name)"
-                  />
-                  <span class="range-sep">—</span>
-                  <el-input-number
-                    v-model="rangeMax[col.name]"
-                    :min="col.min"
-                    :max="col.max"
-                    placeholder="最大"
-                    controls-position="right"
-                    style="width: 50%"
-                    @change="onRangeChange(col.name)"
-                  />
-                </div>
+      <template v-if="moreColumns.length && expanded">
+        <el-divider content-position="left">更多筛选条件</el-divider>
+        <el-row :gutter="16">
+          <el-col v-for="col in moreColumns" :key="col.name" :span="8">
+            <el-form-item>
+              <template #label>
+                <span class="field-label">
+                  <span class="field-name">{{ col.name }}</span>
+                  <span class="field-type" :class="`field-type--${col.control}`">{{ typeLabel(col.control) }}</span>
+                </span>
+              </template>
+              <el-select
+                v-if="col.control === 'select'"
+                v-model="model[col.name]"
+                placeholder="请选择"
+                filterable
+                clearable
+                multiple
+                collapse-tags
+                collapse-tags-tooltip
+                style="width: 100%"
+                @change="emitChange"
+              >
+                <el-option v-for="opt in col.options" :key="opt" :label="String(opt)" :value="opt" />
+              </el-select>
 
-                <el-date-picker
-                  v-else-if="col.control === 'daterange'"
-                  v-model="dateRange[col.name]"
-                  type="daterange"
-                  value-format="YYYY-MM-DD"
-                  start-placeholder="开始日期"
-                  end-placeholder="结束日期"
-                  style="width: 100%"
-                  @change="onDateChange(col.name)"
+              <div v-else-if="col.control === 'range'" class="range-box">
+                <el-input-number
+                  v-model="rangeMin[col.name]"
+                  :min="col.min"
+                  :max="col.max"
+                  placeholder="最小"
+                  controls-position="right"
+                  style="width: 50%"
+                  @change="onRangeChange(col.name)"
                 />
-
-                <el-input
-                  v-else
-                  v-model="model[col.name]"
-                  placeholder="请输入关键词"
-                  clearable
-                  @input="emitChange"
+                <span class="range-sep">—</span>
+                <el-input-number
+                  v-model="rangeMax[col.name]"
+                  :min="col.min"
+                  :max="col.max"
+                  placeholder="最大"
+                  controls-position="right"
+                  style="width: 50%"
+                  @change="onRangeChange(col.name)"
                 />
-              </el-form-item>
-            </el-col>
-          </el-row>
-        </el-collapse-item>
-      </el-collapse>
+              </div>
+
+              <el-date-picker
+                v-else-if="col.control === 'daterange'"
+                v-model="dateRange[col.name]"
+                type="daterange"
+                value-format="YYYY-MM-DD"
+                start-placeholder="开始日期"
+                end-placeholder="结束日期"
+                style="width: 100%"
+                @change="onDateChange(col.name)"
+              />
+
+              <el-input
+                v-else
+                v-model="model[col.name]"
+                placeholder="请输入关键词"
+                clearable
+                @input="emitChange"
+              />
+            </el-form-item>
+          </el-col>
+        </el-row>
+      </template>
     </el-form>
   </div>
 </template>
 
 <script setup lang="ts">
-import { computed, reactive, ref, watch } from 'vue'
-import { Search } from '@element-plus/icons-vue'
+import { computed, reactive, ref } from 'vue'
+import { Search, ArrowDown, ArrowUp } from '@element-plus/icons-vue'
 import type { DataColumn } from '@/types'
 
 const props = defineProps<{
@@ -200,7 +209,7 @@ const rangeMax = reactive<Record<string, number | undefined>>({})
 const dateRange = reactive<Record<string, [string, string] | null>>({})
 
 const keyword = ref('')
-const expanded = ref<string[]>([])
+const expanded = ref(false)
 
 // 按关键词过滤后的列（名称模糊匹配）
 const matchedColumns = computed(() => {
@@ -213,10 +222,9 @@ const matchedColumns = computed(() => {
 const visibleColumns = computed(() => matchedColumns.value.slice(0, VISIBLE_LIMIT))
 const moreColumns = computed(() => matchedColumns.value.slice(VISIBLE_LIMIT))
 
-// 搜索命中数不足时自动展开折叠区，避免"藏在折叠里找不到"
-watch([keyword, matchedColumns], () => {
-  expanded.value = visibleColumns.value.length < matchedColumns.value.length ? ['more'] : []
-})
+function toggleMore() {
+  expanded.value = !expanded.value
+}
 
 // 字段类型标签
 function typeLabel(control: string): string {
@@ -238,7 +246,7 @@ function resetAll() {
   Object.keys(rangeMax).forEach((k) => (rangeMax[k] = undefined))
   Object.keys(dateRange).forEach((k) => (dateRange[k] = null))
   keyword.value = ''
-  expanded.value = []
+  expanded.value = false
   emitChange()
 }
 
@@ -335,5 +343,13 @@ defineExpose({
   border: 1px solid var(--border-light);
 }
 .range-sep { margin: 0 6px; color: var(--text-placeholder); }
-.more-collapse { border-top: 1px dashed var(--border-light); border-bottom: none; margin-top: 8px; }
+.more-toggle-wrap {
+  display: flex;
+  justify-content: center;
+  padding: 16px 0 4px;
+}
+.more-toggle {
+  min-width: 280px;
+  font-size: 14px;
+}
 </style>

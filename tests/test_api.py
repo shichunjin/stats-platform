@@ -7,7 +7,7 @@ import pytest
 from sqlalchemy import inspect
 
 from app.auth import create_access_token
-from app.models import User, Scope, PendingFile, ExportResult, AuditLog, Message, Session as SessionModel
+from app.models import User, PendingFile, ExportResult, AuditLog, Message, Session as SessionModel
 from app.config import settings
 
 
@@ -152,12 +152,12 @@ class TestGetMe:
         resp = client.get("/auth/me", headers={"Authorization": "Bearer invalid_token"})
         assert resp.status_code == 401
 
-    def test_get_me_includes_dept(self, client, test_user, test_scope, auth_headers):
-        """用户信息包含部门"""
+    def test_get_me_basic_info(self, client, test_user, auth_headers):
+        """用户信息返回基础字段"""
         resp = client.get("/auth/me", headers=auth_headers)
         data = resp.json()
-        assert data["dept"] is not None
-        assert data["dept"]["scope_code"] == "dept_1"
+        assert data["username"] == test_user.username
+        assert data["role"] == "user"
 
 
 # ============================================================
@@ -268,7 +268,7 @@ class TestResultsMine:
     def test_results_only_own(self, client, db_session, test_user, auth_headers):
         """只返回自己的结果"""
         # 创建另一个用户的结果
-        other = User(username="other", dept_id=test_user.dept_id, role="user", is_active=True)
+        other = User(username="other", role="user", is_active=True)
         db_session.add(other)
         db_session.commit()
         db_session.refresh(other)
@@ -335,15 +335,6 @@ class TestResultsRequestExport:
         """未认证返回 401"""
         resp = client.post("/results/request-export")
         assert resp.status_code == 401
-
-    def test_request_rejected_without_scopes(self, client, test_user_no_scope):
-        """安全修复 B7：未分配数据权限（scopes 为空）的用户申请导出必须 403"""
-        token = create_access_token(
-            test_user_no_scope.id, test_user_no_scope.username, "user")
-        resp = client.post("/results/request-export",
-                           headers={"Authorization": f"Bearer {token}"})
-        assert resp.status_code == 403
-        assert "权限" in resp.json()["detail"]
 
     def test_request_reregisters_changed_content(self, client, test_user, auth_headers, pending_dir):
         """安全修复 B9：同名文件内容变更后重新申请，必须生成新申请并接受重新审查"""
@@ -700,121 +691,6 @@ class TestAdminUsers:
     def test_users_without_auth(self, client):
         """未认证返回 401"""
         resp = client.get("/admin/users")
-        assert resp.status_code == 401
-
-
-class TestAdminScopes:
-    """GET /admin/scopes 测试"""
-
-    def test_admin_can_list_scopes(self, client, test_admin, test_scope, admin_headers):
-        """管理员可查看所有数据范围"""
-        resp = client.get("/admin/scopes", headers=admin_headers)
-        assert resp.status_code == 200
-        data = resp.json()
-        codes = [s["scope_code"] for s in data]
-        assert "dept_1" in codes
-
-    def test_user_cannot_list_scopes(self, client, test_user, user_token):
-        """普通用户不能查看数据范围"""
-        resp = client.get("/admin/scopes", headers={"Authorization": f"Bearer {user_token}"})
-        assert resp.status_code == 403
-
-
-class TestAdminAssignScopes:
-    """PUT /admin/users/{id}/scopes 测试"""
-
-    def _create_project(self, db_session, code="proj_1", name="测试项目"):
-        scope = Scope(
-            scope_code=code,
-            scope_type="project",
-            scope_name=name,
-            data_path=os.path.join(settings.fileserver_root, "data", code),
-        )
-        db_session.add(scope)
-        db_session.commit()
-        db_session.refresh(scope)
-        return scope
-
-    def test_assign_dept_and_scopes(self, client, test_admin, test_user, test_scope, admin_headers, db_session):
-        """分配部门 + 项目范围成功"""
-        proj = self._create_project(db_session)
-        resp = client.put(
-            f"/admin/users/{test_user.id}/scopes",
-            json={"dept_id": test_scope.id, "scope_ids": [proj.id]},
-            headers=admin_headers,
-        )
-        assert resp.status_code == 200
-        data = resp.json()
-        assert data["dept_id"] == test_scope.id
-        assert [s["id"] for s in data["scopes"]] == [proj.id]
-
-    def test_assign_clear_all(self, client, test_admin, test_user, admin_headers, db_session):
-        """清空权限（dept_id=null, scope_ids=[]）"""
-        resp = client.put(
-            f"/admin/users/{test_user.id}/scopes",
-            json={"dept_id": None, "scope_ids": []},
-            headers=admin_headers,
-        )
-        assert resp.status_code == 200
-        data = resp.json()
-        assert data["dept_id"] is None
-        assert data["scopes"] == []
-
-    def test_assign_nonexistent_user(self, client, test_admin, admin_headers):
-        """分配不存在的用户返回 404"""
-        resp = client.put(
-            "/admin/users/99999/scopes",
-            json={"dept_id": None, "scope_ids": []},
-            headers=admin_headers,
-        )
-        assert resp.status_code == 404
-
-    def test_assign_invalid_dept(self, client, test_admin, test_user, admin_headers):
-        """分配无效部门 ID 返回 400"""
-        resp = client.put(
-            f"/admin/users/{test_user.id}/scopes",
-            json={"dept_id": 99999, "scope_ids": []},
-            headers=admin_headers,
-        )
-        assert resp.status_code == 400
-
-    def test_assign_invalid_project_scope(self, client, test_admin, test_user, admin_headers):
-        """分配无效项目范围 ID 返回 400"""
-        resp = client.put(
-            f"/admin/users/{test_user.id}/scopes",
-            json={"dept_id": None, "scope_ids": [99999]},
-            headers=admin_headers,
-        )
-        assert resp.status_code == 400
-
-    def test_assign_creates_audit_log(self, client, test_admin, test_user, admin_headers, db_session):
-        """分配操作写入审计日志"""
-        resp = client.put(
-            f"/admin/users/{test_user.id}/scopes",
-            json={"dept_id": None, "scope_ids": []},
-            headers=admin_headers,
-        )
-        assert resp.status_code == 200
-        logs = db_session.query(AuditLog).filter(
-            AuditLog.action == "assign_scopes"
-        ).all()
-        assert len(logs) >= 1
-
-    def test_user_cannot_assign(self, client, test_user, user_token):
-        """普通用户不能分配权限"""
-        resp = client.put(
-            f"/admin/users/{test_user.id}/scopes",
-            json={"dept_id": None, "scope_ids": []},
-            headers={"Authorization": f"Bearer {user_token}"},
-        )
-        assert resp.status_code == 403
-
-    def test_assign_without_auth(self, client, test_user):
-        """未认证返回 401"""
-        resp = client.put(
-            f"/admin/users/{test_user.id}/scopes",
-            json={"dept_id": None, "scope_ids": []},
-        )
         assert resp.status_code == 401
 
 

@@ -101,13 +101,6 @@ const cards = computed(() => {
       color: 'linear-gradient(135deg,#f59e0b,#fbbf24)',
       path: '/user/messages',
     },
-    {
-      title: '数据权限',
-      value: userStore.user?.scopes?.length || 0,
-      icon: 'Key',
-      color: 'linear-gradient(135deg,#64748b,#94a3b8)',
-      path: undefined as string | undefined,
-    },
   ]
 })
 

@@ -143,14 +143,13 @@ const activeMenu = computed(() => route.path)
 const currentTitle = computed(() => (route.meta?.title as string) || '首页')
 
 // 根据角色过滤菜单
-// 约束：admin 角色导航固定 6 个菜单项，不得新增；
+// 约束：admin 角色导航固定 5 个菜单项，不得新增；
 // superadmin 在此基础上追加「用户管理」（角色分配，仅超管可见）
 const menuList = computed(() => {
   const adminMenu = [
     { path: '/admin/pending-data', title: '待处理数据申请', icon: 'List' },
     { path: '/admin/data-filter', title: '数据筛选与生成', icon: 'Filter' },
     { path: '/admin/pending-exports', title: '待审核导出申请', icon: 'Checked' },
-    { path: '/admin/user-scopes', title: '用户数据权限', icon: 'UserFilled' },
     { path: '/admin/platform-config', title: '连接数据分析PC', icon: 'Connection' },
     { path: '/admin/audit', title: '审计日志', icon: 'DocumentCopy' },
   ]
