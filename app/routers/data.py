@@ -183,7 +183,6 @@ def generate_filtered(
         # 管理员直接分配——自动建一条申请记录作为分配痕迹
         apply_obj = DataApply(
             user_id=target.id,
-            target_user_id=target.id,
             purpose="管理员直接分配",
             priority="medium",
             status="processing",
