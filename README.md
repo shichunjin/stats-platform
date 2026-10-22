@@ -316,15 +316,25 @@ cd guacamole
 #          必须使用数据库（JDBC）/ LDAP / RADIUS 认证，这里用 PostgreSQL。
 docker run --rm guacamole/guacamole:1.5.5 /opt/guacamole/bin/initdb.sh --postgresql > initdb.sql
 
-# ④ 配置数据库密码（环境变量，不入库）
+# ④ 在宿主机 PostgreSQL 实例中建独立库（与平台业务库 stats_platform 同实例、不同 database）
+sudo -u postgres psql -c "CREATE USER guacamole_user WITH PASSWORD '强密码';"
+sudo -u postgres psql -c "CREATE DATABASE guacamole_db OWNER guacamole_user;"
+sudo -u postgres psql -d guacamole_db -f initdb.sql
+
+# ⑤ 允许 Docker 网段访问宿主机 PostgreSQL
+#    postgresql.conf: listen_addresses = 'localhost,172.17.0.1'
+#    pg_hba.conf:     host  guacamole_db  guacamole_user  172.17.0.0/16  scram-sha-256
+#    （docker0 网关地址用 ip addr show docker0 确认）
+
+# ⑥ 配置数据库密码（环境变量，不入库）
 cp .env.example .env
-vim .env   # 填入 POSTGRES_PASSWORD
+vim .env   # 填入 POSTGRES_PASSWORD（与上面 guacamole_user 一致）
 
-# ⑤ 启动（首次启动会自动执行 initdb.sql 初始化数据库）
-sudo docker compose up -d
+# ⑦ 启动（不再自带 postgres 容器，直接连宿主机实例）
+sudo docker compose up -d --remove-orphans
 
-# ⑥ 验证
-sudo docker compose ps          # 三个容器应为 running（guacd/postgres/guacamole）
+# ⑧ 验证
+sudo docker compose ps          # 两个容器应为 running（guacd/guacamole）
 sudo docker compose logs guacamole   # 查看日志无报错
 ```
 

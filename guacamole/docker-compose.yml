@@ -2,16 +2,24 @@
 # 统计软件托管平台 - Guacamole Docker 部署
 # 用途：通过浏览器远程访问 Windows 云主机上的统计软件
 #
-# 架构：浏览器 → guacamole(Web) → guacd(RDP 后端) → Windows 云主机 8.133.223.251
+# 架构：浏览器 → guacamole(Web) → guacd(RDP 后端) → Windows 云主机
 #
 # 认证：PostgreSQL JDBC（官方 Docker 镜像不支持 user-mapping.xml 文件认证）
 #
-# 首次部署步骤：
-#   1. 生成数据库初始化脚本 initdb.sql：
-#        docker run --rm guacamole/guacamole:1.6.0 /opt/guacamole/bin/initdb.sh --postgresql > initdb.sql
-#   2. cp .env.example .env 并填入 POSTGRES_PASSWORD
-#   3. docker compose up -d
-#   4. 默认管理员 guacadmin / guacadmin 登录，创建用户与 RDP 连接
+# 数据库：与平台业务库共用**同一个 PostgreSQL 实例**，但使用**独立 database**
+#   - 平台业务库：stats_platform（含 test_data 分析宽表）
+#   - Guacamole 库：guacamole_db（guacamole_* 表）
+#   分开的原因：Guacamole 升级需重建 guacamole_* 表，独立 database 可避免
+#   误删平台业务数据；且 guac 库存有 RDP 连接凭据，需与业务库分别 dump。
+#
+# 首次部署 / 从旧独立 postgres 容器迁移步骤：
+#   1. 备份旧容器库：docker compose exec -T postgres pg_dump -U guacamole_user -d guacamole_db > guac_backup.sql
+#   2. 宿主机建库：sudo -u postgres psql -c "CREATE USER guacamole_user WITH PASSWORD '***';"
+#                  sudo -u postgres psql -c "CREATE DATABASE guacamole_db OWNER guacamole_user;"
+#   3. 导入备份：psql "postgresql://guacamole_user:***@127.0.0.1:5432/guacamole_db" -f guac_backup.sql
+#   4. cp .env.example .env 并填入 POSTGRES_PASSWORD（与宿主机账号一致）
+#   5. docker compose up -d --remove-orphans
+#   6. 停用并删除旧容器：docker compose -f docker-compose.old.yml down -v
 # ============================================================
 
 services:
@@ -22,38 +30,24 @@ services:
     volumes:
       - ./recordings:/var/log/guacamole/recordings
 
-  # PostgreSQL 数据库（存储用户、连接、权限等）
-  postgres:
-    image: postgres:15-alpine
-    restart: always
-    ports:
-      # 映射到宿主机回环地址，供托管平台后端（uvicorn）同步创建/更新用户
-      # 仅绑定 127.0.0.1，不对外网暴露
-      - "127.0.0.1:5433:5432"
-    environment:
-      POSTGRES_DB: guacamole_db
-      POSTGRES_USER: guacamole_user
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
-    volumes:
-      - ./db-data:/var/lib/postgresql/data
-      # 首次启动时自动执行 initdb.sql 初始化 schema（需预先生成）
-      - ./initdb.sql:/docker-entrypoint-initdb.d/initdb.sql:ro
-
   # Guacamole Web 前端（浏览器访问入口）
+  # 数据库改为宿主机 PostgreSQL，不再自带 postgres 容器
   guacamole:
     image: guacamole/guacamole:1.6.0
     restart: always
     ports:
       - "8080:8080"
+    # 让容器内可通过 host.docker.internal 访问宿主机（需 Docker 20.10+）
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     environment:
       GUACD_HOSTNAME: guacd
       GUACD_PORT: "4822"
-      # PostgreSQL JDBC 认证
-      POSTGRESQL_HOSTNAME: postgres
-      POSTGRESQL_PORT: "5432"
-      POSTGRESQL_DATABASE: guacamole_db
-      POSTGRESQL_USER: guacamole_user
+      # PostgreSQL JDBC 认证（宿主机实例，独立 database guacamole_db）
+      POSTGRESQL_HOSTNAME: ${POSTGRESQL_HOSTNAME:-host.docker.internal}
+      POSTGRESQL_PORT: ${POSTGRESQL_PORT:-5432}
+      POSTGRESQL_DATABASE: ${POSTGRESQL_DATABASE:-guacamole_db}
+      POSTGRESQL_USER: ${POSTGRESQL_USER:-guacamole_user}
       POSTGRESQL_PASSWORD: ${POSTGRES_PASSWORD}
     depends_on:
       - guacd
-      - postgres
