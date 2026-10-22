@@ -9,7 +9,7 @@
 
     <el-row :gutter="16">
       <el-col :span="6" v-for="card in cards" :key="card.title">
-        <el-card shadow="never" class="stat-card card card--hover">
+        <el-card shadow="never" class="stat-card card card--hover" :class="{ 'card--clickable': !!card.path }" @click="card.path && router.push(card.path)">
           <div class="stat-icon" :style="{ background: card.color }">
             <el-icon :size="26"><component :is="card.icon" /></el-icon>
           </div>
@@ -60,24 +60,72 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted } from 'vue'
+import { computed, onMounted, ref } from 'vue'
+import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { useUserStore } from '@/stores/user'
 import { useMessageStore } from '@/stores/messages'
 import { connectSession } from '@/api/session'
+import { getMyApplies } from '@/api/messages'
+import { getMyResults } from '@/api/results'
 
+const router = useRouter()
 const userStore = useUserStore()
 const messageStore = useMessageStore()
 
-const cards = computed(() => [
-  { title: '我的申请', value: '--', icon: 'Document', color: 'linear-gradient(135deg,#2f63ff,#5b7bff)' },
-  { title: '结果文件', value: '--', icon: 'FolderOpened', color: 'linear-gradient(135deg,#10b981,#34d399)' },
-  { title: '未读消息', value: messageStore.unreadCount, icon: 'Bell', color: 'linear-gradient(135deg,#f59e0b,#fbbf24)' },
-  { title: '数据权限', value: userStore.user?.scopes?.length || 0, icon: 'Key', color: 'linear-gradient(135deg,#64748b,#94a3b8)' },
-])
+// 首页统计计数（真实拉取，不再硬编码 "--"）
+const applyCount = ref<number | null>(null)
+const resultCount = ref<number | null>(null)
 
-onMounted(() => {
+const cards = computed(() => {
+  const isAdmin = userStore.isAdmin
+  return [
+    {
+      title: isAdmin ? '待处理申请' : '我的申请',
+      value: applyCount.value ?? '--',
+      icon: 'Document',
+      color: 'linear-gradient(135deg,#2f63ff,#5b7bff)',
+      path: isAdmin ? '/admin/pending-data' : '/user/my-requests',
+    },
+    {
+      title: '结果文件',
+      value: resultCount.value ?? '--',
+      icon: 'FolderOpened',
+      color: 'linear-gradient(135deg,#10b981,#34d399)',
+      path: '/user/my-results',
+    },
+    {
+      title: '未读消息',
+      value: messageStore.unreadCount,
+      icon: 'Bell',
+      color: 'linear-gradient(135deg,#f59e0b,#fbbf24)',
+      path: '/user/messages',
+    },
+    {
+      title: '数据权限',
+      value: userStore.user?.scopes?.length || 0,
+      icon: 'Key',
+      color: 'linear-gradient(135deg,#64748b,#94a3b8)',
+      path: undefined as string | undefined,
+    },
+  ]
+})
+
+onMounted(async () => {
   messageStore.fetch().catch(() => {})
+  // 两个计数接口：管理员从待处理数据申请拉（admin 路径），普通用户拉自己的申请
+  try {
+    const list = await getMyApplies()
+    applyCount.value = list.length
+  } catch {
+    /* 拦截器处理 */
+  }
+  try {
+    const r = await getMyResults()
+    resultCount.value = (r?.pending?.length || 0) + (r?.published?.length || 0)
+  } catch {
+    /* 拦截器处理 */
+  }
 })
 
 async function connect() {
@@ -123,6 +171,8 @@ async function connect() {
   margin-top: 4px;
 }
 .card { border-radius: var(--radius-lg); border: 1px solid var(--border-light); }
+.card--clickable { cursor: pointer; transition: transform 0.18s ease, box-shadow 0.18s ease; }
+.card--clickable:hover { transform: translateY(-2px); box-shadow: 0 6px 20px rgba(15, 23, 42, 0.12); }
 .card-header {
   display: flex;
   align-items: center;

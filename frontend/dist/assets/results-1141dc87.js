@@ -1,0 +1,1 @@
+import{J as e}from"./index-0a5e7746.js";function r(){return e.get("/results/mine")}function o(){return e.post("/results/request-export")}function u(t){return e.post(`/results/${t}/download`,{},{responseType:"blob"})}export{u as d,r as g,o as r};
