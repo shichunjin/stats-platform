@@ -12,11 +12,11 @@ const routes: RouteRecordRaw[] = [
     children: [
       { path: 'dashboard', name: 'Dashboard', component: () => import('@/views/dashboard/Dashboard.vue'), meta: { title: '首页', icon: 'HomeFilled' } },
 
-      // ---- 用户端 ----
-      { path: 'user/data-request', name: 'DataRequest', component: () => import('@/views/user/DataRequest.vue'), meta: { title: '申请获取数据', icon: 'Download', roles: ['user', 'admin'] } },
-      { path: 'user/my-requests', name: 'MyRequests', component: () => import('@/views/user/MyRequests.vue'), meta: { title: '我的申请记录', icon: 'Document', roles: ['user', 'admin'] } },
-      { path: 'user/my-results', name: 'MyResults', component: () => import('@/views/user/MyResults.vue'), meta: { title: '我的结果文件', icon: 'FolderOpened', roles: ['user', 'admin'] } },
-      { path: 'user/messages', name: 'Messages', component: () => import('@/views/user/Messages.vue'), meta: { title: '消息中心', icon: 'Bell', roles: ['user', 'admin'] } },
+      // ---- 用户端（管理员 / 超管也可以发起数据申请、查看自己的结果） ----
+      { path: 'user/data-request', name: 'DataRequest', component: () => import('@/views/user/DataRequest.vue'), meta: { title: '申请获取数据', icon: 'Download', roles: ['user', 'admin', 'superadmin'] } },
+      { path: 'user/my-requests', name: 'MyRequests', component: () => import('@/views/user/MyRequests.vue'), meta: { title: '我的申请记录', icon: 'Document', roles: ['user', 'admin', 'superadmin'] } },
+      { path: 'user/my-results', name: 'MyResults', component: () => import('@/views/user/MyResults.vue'), meta: { title: '我的结果文件', icon: 'FolderOpened', roles: ['user', 'admin', 'superadmin'] } },
+      { path: 'user/messages', name: 'Messages', component: () => import('@/views/user/Messages.vue'), meta: { title: '消息中心', icon: 'Bell', roles: ['user', 'admin', 'superadmin'] } },
 
       // ---- 管理员端（superadmin 继承全部管理员页面） ----
       { path: 'admin/pending-data', name: 'PendingData', component: () => import('@/views/admin/PendingData.vue'), meta: { title: '待处理数据申请', icon: 'List', roles: ['admin', 'superadmin'] } },
