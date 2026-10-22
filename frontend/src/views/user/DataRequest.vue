@@ -4,7 +4,7 @@
       <div class="page-header" style="margin:0">
         <div>
           <div class="page-header__title">申请获取数据</div>
-          <div class="page-header__desc">填写用途与所需字段，提交后等待管理员分配数据</div>
+          <div class="page-header__desc">填写用途，提交后等待管理员分配数据</div>
         </div>
       </div>
     </template>
@@ -12,11 +12,6 @@
       <div class="section-title">申请信息</div>
       <el-form-item label="数据用途" prop="purpose">
         <el-input v-model="form.purpose" type="textarea" :rows="3" placeholder="请描述数据用途（必填）" />
-      </el-form-item>
-      <el-form-item label="所需字段" prop="fields">
-        <el-select v-model="form.fields" multiple filterable collapse-tags collapse-tags-tooltip placeholder="选择需要的字段" style="width: 100%">
-          <el-option v-for="f in fieldOptions" :key="f" :label="f" :value="f" />
-        </el-select>
       </el-form-item>
       <el-form-item label="时间范围">
         <el-date-picker v-model="form.time_range" type="daterange" range-separator="至" start-placeholder="开始" end-placeholder="结束" style="width: 100%" />
@@ -46,18 +41,14 @@ const router = useRouter()
 const formRef = ref<FormInstance>()
 const loading = ref(false)
 
-const fieldOptions = ['age33', '孕妇IQ值33', 'education33', 'income33', 'sex33', 'ADHD36', 'ASD36', 'BMIPMI值33', 'GWG体重', '胎次']
-
 const form = reactive({
   purpose: '',
-  fields: [] as string[],
   time_range: [] as string[],
   priority: 'medium' as 'low' | 'medium' | 'high',
 })
 
 const rules: FormRules = {
   purpose: [{ required: true, message: '请填写数据用途', trigger: 'blur' }],
-  fields: [{ required: true, message: '请选择所需字段', trigger: 'change' }],
   priority: [{ required: true, message: '请选择优先级', trigger: 'change' }],
 }
 
@@ -68,7 +59,7 @@ async function onSubmit() {
   try {
     await submitApply({
       purpose: form.purpose,
-      fields: form.fields,
+      fields: [],
       time_range: form.time_range?.length ? [form.time_range[0], form.time_range[1]] : undefined,
       priority: form.priority,
     })
