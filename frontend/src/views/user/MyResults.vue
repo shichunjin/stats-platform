@@ -85,12 +85,7 @@
           <el-table-column label="文件名" min-width="220" show-overflow-tooltip>
             <template #default="{ row }">{{ row.file_name }}</template>
           </el-table-column>
-          <el-table-column prop="file_type" label="类型" width="100" />
-          <el-table-column label="相似度" width="110">
-            <template #default="{ row }">
-              <span class="similarity-value tnum" :class="simLevel(row)">{{ simText(row) }}</span>
-            </template>
-          </el-table-column>
+          <el-table-column label="类型" width="100" />
           <el-table-column label="状态" width="110">
             <template #default="{ row }">
               <span class="status-cell">
@@ -203,23 +198,6 @@ function statusDot(s: string) {
 function statusText(s: string) {
   return ({ pending: '待审核', approved: '已通过', rejected: '已驳回' } as Record<string, string>)[s] || s
 }
-
-// 相似度
-function simPercent(row: PendingFile): number | null {
-  const m = String(row.review_reason || '').match(/(\d+(?:\.\d+)?)\s*%/)
-  return m ? Number(m[1]) : null
-}
-function simText(row: PendingFile): string {
-  const p = simPercent(row)
-  return p === null ? '—' : `${p}%`
-}
-function simLevel(row: PendingFile): string {
-  const p = simPercent(row)
-  if (p === null) return 'sim-unknown'
-  if (p >= 80) return 'sim-high'
-  if (p >= 60) return 'sim-mid'
-  return 'sim-low'
-}
 </script>
 
 <style scoped>
@@ -227,11 +205,6 @@ function simLevel(row: PendingFile): string {
 .file-icon { color: var(--text-secondary); }
 .validity { font-size: 13px; color: var(--text-regular); }
 .status-cell { display: inline-flex; align-items: center; gap: 4px; }
-.similarity-value { font-weight: 600; font-size: 13px; }
-.sim-high { color: var(--status-reject); }
-.sim-mid { color: var(--status-pending); }
-.sim-low { color: var(--status-done); }
-.sim-unknown { color: var(--text-secondary); }
 .tag {
   display: inline-block;
   padding: 2px 10px;
