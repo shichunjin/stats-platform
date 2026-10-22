@@ -62,7 +62,6 @@ stats-platform/
 | POST | `/auth/login` | 登录获取 JWT Token | 公开 |
 | GET | `/auth/me` | 获取当前用户信息与数据范围 | 登录 |
 | POST | `/session/connect` | 连接 Windows 分析平台（单按钮） | 登录 |
-| POST | `/data/import` | 导入数据集 CSV 到数据库 | 管理员 |
 | POST | `/data/fetch` | 获取数据（读库生成 Excel 到文件服务器） | 登录 |
 | GET | `/results/mine` | 获取我的导出申请和已发布结果 | 登录 |
 | POST | `/results/request-export` | 申请导出结果（待管理员审核） | 登录 |
@@ -146,8 +145,10 @@ stats-platform/
 
 
 sudo -u postgres psql -c "CREATE USER stats WITH PASSWORD 'stats123';"
-sudo -u postgres psql -c "GRANT ALL ON DATABASE stats_platform TO stats;"
-psql -U stats -d stats_platform -f schema.sql
+sudo -u postgres psql -c "CREATE DATABASE stats_platform OWNER stats;"
+
+# 表结构由 ORM 自动创建：配置好 .env 的 DATABASE_URL 后启动应用即可
+# （schema.sql 为早期手工 DDL，已与 app/models.py 脱节，仅作历史参考，不要再执行）
 
 # 部署 FastAPI
 cd stats-platform

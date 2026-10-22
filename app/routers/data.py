@@ -11,7 +11,6 @@ from app.auth import get_current_user, require_admin
 from app.config import settings
 from app.rate_limit import get_client_ip
 from app.dataset import (
-    import_csv_to_db,
     generate_filtered_excel_from_table,
     analyze_table_columns,
     timestamp_filename,
@@ -21,66 +20,6 @@ from app.schemas import FilteredDataGenerateRequest
 from app.routers.admin import get_workspace_root
 
 router = APIRouter(prefix="/data", tags=["数据"])
-
-
-@router.post("/import", summary="导入数据集到数据库（管理员）", description="""
-**将原始 CSV 数据集导入数据库（仅管理员）**
-
-- 默认读取 `settings.dataset_csv_path` 指向的 CSV 文件
-- 解析后存入 `dataset_meta`（列名/行数）和 `dataset_rows`（行数据）
-- 重复导入会清空同名旧数据并重建
-
-**错误码**
-- `401`：未认证
-- `403`：非管理员
-""")
-def import_dataset(
-    request: Request,
-    csv_path: str | None = None,
-    admin: User = Depends(require_admin),
-    db: Session = Depends(get_db),
-):
-    client_ip = get_client_ip(request)
-    path = csv_path or settings.dataset_csv_path
-
-    # 安全修复 B4：限制可导入的路径，防止本地文件读取（LFI）
-    # 允许的路径：1) 配置文件中的 dataset_csv_path；2) fileserver_root 下的 csv 文件
-    allowed_base = os.path.realpath(settings.dataset_csv_path)
-    allowed_root = os.path.realpath(settings.fileserver_root)
-    resolved = os.path.realpath(path)
-
-    if resolved != allowed_base and not resolved.startswith(allowed_root + os.sep):
-        db.add(AuditLog(
-            user_id=admin.id,
-            action="dataset_import",
-            detail=f"导入被拒绝（路径不允许）: {path}",
-            status="failed",
-            ip_addr=client_ip,
-        ))
-        db.commit()
-        raise HTTPException(
-            status_code=400,
-            detail="导入路径不允许。仅支持配置文件指定的数据集路径或 fileserver_root 下的 CSV 文件。",
-        )
-
-    if not os.path.exists(resolved):
-        raise HTTPException(status_code=404, detail=f"CSV 文件不存在: {path}")
-
-    meta = import_csv_to_db(resolved, db, name=settings.dataset_name)
-
-    db.add(AuditLog(
-        user_id=admin.id,
-        action="dataset_import",
-        detail=f"导入数据集 {meta.name}: {meta.total_rows} 行, {len(meta.column_names or [])} 列",
-        ip_addr=client_ip,
-    ))
-    db.commit()
-
-    return {
-        "name": meta.name,
-        "total_rows": meta.total_rows,
-        "columns": len(meta.column_names or []),
-    }
 
 
 @router.post("/fetch", summary="获取数据（已停用）", description="""

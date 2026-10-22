@@ -1,11 +1,6 @@
 import request from './request'
 import type { DataColumn } from '@/types'
 
-/** 管理员导入 CSV 到数据库 */
-export function importDataset() {
-  return request.post<unknown, { dataset_id: number; total_rows: number; total_columns: number }>('/data/import')
-}
-
 /** 获取 testData 表结构（用于智能筛选） */
 export function getColumns() {
   return request.get<unknown, DataColumn[]>('/data/columns')
