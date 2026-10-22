@@ -14,7 +14,7 @@
         v-for="m in messageStore.list"
         :key="m.id"
         :type="timelineType(m.type)"
-        :timestamp="m.created_at"
+        :timestamp="formatTime(m.created_at)"
         placement="top"
       >
         <div class="msg-card" :class="{ unread: !m.read }" @click="onClick(m)">
@@ -35,6 +35,7 @@ import { onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { useMessageStore } from '@/stores/messages'
 import type { Message } from '@/types'
+import { formatTime } from '@/utils'
 
 const router = useRouter()
 const messageStore = useMessageStore()

@@ -54,7 +54,9 @@
           </span>
         </template>
       </el-table-column>
-      <el-table-column prop="apply_time" label="申请时间" width="170" sortable="custom" />
+      <el-table-column label="申请时间" width="170" sortable="custom" prop="apply_time">
+        <template #default="{ row }">{{ formatTime(row.apply_time, true) }}</template>
+      </el-table-column>
       <el-table-column label="操作" width="220" fixed="right">
         <template #default="{ row }">
           <el-button link type="primary" @click="openDetail(row)">详情</el-button>
@@ -102,7 +104,7 @@
                               :label="detailRow.status === 'failed' ? '失败原因' : '驳回原因'">
           {{ detailRow.reject_reason || '-' }}
         </el-descriptions-item>
-        <el-descriptions-item label="申请时间">{{ detailRow.apply_time }}</el-descriptions-item>
+        <el-descriptions-item label="申请时间">{{ formatTime(detailRow.apply_time, true) }}</el-descriptions-item>
       </el-descriptions>
     </el-dialog>
 
@@ -133,6 +135,7 @@ import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import type { DataApply } from '@/types'
 import { getDataApplies, rejectDataApply, processDataApply } from '@/api/admin'
+import { formatTime } from '@/utils'
 
 const router = useRouter()
 const list = ref<DataApply[]>([])

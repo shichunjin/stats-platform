@@ -12,6 +12,13 @@ export function formatDate(s?: string | null): string {
   return new Date(s).toLocaleString('zh-CN')
 }
 
+/** 格式化 ISO 时间为 YYYY-MM-DD HH:mm（withSeconds 时保留秒），空值显示 '-' */
+export function formatTime(s?: string | null, withSeconds = false): string {
+  if (!s) return '-'
+  const t = String(s).replace('T', ' ')
+  return withSeconds ? t.slice(0, 19) : t.slice(0, 16)
+}
+
 /** 生成带时间戳的文件名：{name}_{YYYYMMDD_HHmmss}.{ext} */
 export function timestampFilename(name: string, ext = 'xlsx'): string {
   const d = new Date()

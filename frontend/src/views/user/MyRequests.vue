@@ -19,9 +19,11 @@
           </span>
         </template>
       </el-table-column>
-      <el-table-column prop="apply_time" label="申请时间" width="170" />
-      <el-table-column prop="finish_time" label="完成时间" width="170">
-        <template #default="{ row }">{{ row.finish_time || '-' }}</template>
+      <el-table-column label="申请时间" width="150">
+        <template #default="{ row }">{{ formatTime(row.apply_time) }}</template>
+      </el-table-column>
+      <el-table-column label="完成时间" width="150">
+        <template #default="{ row }">{{ formatTime(row.finish_time) }}</template>
       </el-table-column>
       <el-table-column label="操作" width="160" fixed="right">
         <template #default="{ row }">
@@ -43,6 +45,7 @@ import { onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import type { DataApply } from '@/types'
 import { getMyApplies } from '@/api/messages'
+import { formatTime } from '@/utils'
 
 const router = useRouter()
 const list = ref<DataApply[]>([])

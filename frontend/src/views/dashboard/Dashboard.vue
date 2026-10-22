@@ -50,7 +50,7 @@
             <div v-for="m in messageStore.list.slice(0, 5)" :key="m.id" class="msg-row" @click="m.link && $router.push(m.link)">
               <span class="msg-dot" :class="`dot--${m.type}`"></span>
               <span class="msg-text">{{ m.title }}</span>
-              <span class="msg-time">{{ m.created_at }}</span>
+              <span class="msg-time">{{ formatTime(m.created_at) }}</span>
             </div>
           </div>
         </el-card>
@@ -68,6 +68,7 @@ import { useMessageStore } from '@/stores/messages'
 import { connectSession } from '@/api/session'
 import { getMyApplies } from '@/api/messages'
 import { getMyResults } from '@/api/results'
+import { formatTime } from '@/utils'
 
 const router = useRouter()
 const userStore = useUserStore()

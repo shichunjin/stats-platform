@@ -26,7 +26,9 @@
     </template>
 
     <el-table :data="pagedList" v-loading="loading" stripe @sort-change="onSort">
-      <el-table-column prop="created_at" label="操作时间" width="170" sortable="custom" />
+      <el-table-column label="操作时间" width="170" sortable="custom" prop="created_at">
+        <template #default="{ row }">{{ formatTime(row.created_at, true) }}</template>
+      </el-table-column>
       <el-table-column prop="user_id" label="操作人(ID)" width="100" />
       <el-table-column label="操作模块" width="130">
         <template #default="{ row }">
@@ -64,6 +66,7 @@
 import { computed, onMounted, ref } from 'vue'
 import type { AuditLog } from '@/types'
 import { getAuditLog } from '@/api/admin'
+import { formatTime } from '@/utils'
 
 const list = ref<AuditLog[]>([])
 const loading = ref(false)

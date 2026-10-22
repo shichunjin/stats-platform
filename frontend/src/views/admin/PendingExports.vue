@@ -38,7 +38,9 @@
           <span class="similarity-value tnum" :class="simLevel(row)">{{ simText(row) }}</span>
         </template>
       </el-table-column>
-      <el-table-column prop="created_at" label="申请时间" width="170" />
+      <el-table-column label="申请时间" width="170" prop="created_at">
+        <template #default="{ row }">{{ formatTime(row.created_at, true) }}</template>
+      </el-table-column>
       <el-table-column label="审核说明" min-width="180" show-overflow-tooltip>
         <template #default="{ row }">{{ row.review_reason || '-' }}</template>
       </el-table-column>
@@ -66,6 +68,7 @@ import { ElMessage } from 'element-plus'
 import { Search, Document } from '@element-plus/icons-vue'
 import type { PendingFile } from '@/types'
 import { getPendingExports, approveExport, rejectExport } from '@/api/admin'
+import { formatTime } from '@/utils'
 
 const list = ref<PendingFile[]>([])
 const loading = ref(false)
