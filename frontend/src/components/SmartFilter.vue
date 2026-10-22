@@ -185,7 +185,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, reactive, ref } from 'vue'
+import { computed, reactive, ref, watch } from 'vue'
 import { Search, ArrowDown, ArrowUp } from '@element-plus/icons-vue'
 import type { DataColumn } from '@/types'
 
