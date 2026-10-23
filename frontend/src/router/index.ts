@@ -5,6 +5,7 @@ const Layout = () => import('@/components/Layout/index.vue')
 
 const routes: RouteRecordRaw[] = [
   { path: '/login', name: 'Login', component: () => import('@/views/login/Login.vue'), meta: { hideTab: true } },
+  { path: '/welcome', name: 'Welcome', component: () => import('@/views/landing/Welcome.vue'), meta: { hideTab: true, public: true } },
   {
     path: '/',
     component: Layout,
@@ -39,7 +40,7 @@ const router = createRouter({
 
 router.beforeEach(async (to) => {
   const userStore = useUserStore()
-  if (to.path === '/login') return true
+  if (to.path === '/login' || to.meta?.public) return true
   if (!userStore.isLoggedIn) return { path: '/login' }
   if (!userStore.user) {
     try {

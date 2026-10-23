@@ -58,8 +58,8 @@
                 v-model="rangeMin[col.name]"
                 :min="col.min"
                 :max="col.max"
+                :controls="false"
                 placeholder="最小"
-                controls-position="right"
                 style="width: 50%"
                 @change="onRangeChange(col.name)"
               />
@@ -68,8 +68,8 @@
                 v-model="rangeMax[col.name]"
                 :min="col.min"
                 :max="col.max"
+                :controls="false"
                 placeholder="最大"
-                controls-position="right"
                 style="width: 50%"
                 @change="onRangeChange(col.name)"
               />
@@ -141,8 +141,8 @@
                   v-model="rangeMin[col.name]"
                   :min="col.min"
                   :max="col.max"
+                  :controls="false"
                   placeholder="最小"
-                  controls-position="right"
                   style="width: 50%"
                   @change="onRangeChange(col.name)"
                 />
@@ -151,8 +151,8 @@
                   v-model="rangeMax[col.name]"
                   :min="col.min"
                   :max="col.max"
+                  :controls="false"
                   placeholder="最大"
-                  controls-position="right"
                   style="width: 50%"
                   @change="onRangeChange(col.name)"
                 />
@@ -341,6 +341,10 @@ defineExpose({
   padding: 4px 8px;
   border-radius: var(--radius-md);
   border: 1px solid var(--border-light);
+}
+/* 区间输入使用紧凑样式，数值居中 */
+.range-box :deep(.el-input-number .el-input__inner) {
+  text-align: center;
 }
 .range-sep { margin: 0 6px; color: var(--text-placeholder); }
 .more-toggle-wrap {

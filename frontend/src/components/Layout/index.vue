@@ -12,9 +12,9 @@
         :collapse="collapsed"
         :collapse-transition="false"
         router
-        background-color="#0b1220"
-        text-color="rgba(255,255,255,0.72)"
-        active-text-color="#ffffff"
+        background-color="transparent"
+        text-color="rgba(61,71,89,0.85)"
+        active-text-color="#4a63f0"
       >
         <template v-for="item in menuList" :key="item.path">
           <el-menu-item :index="item.path">
@@ -240,7 +240,13 @@ function toggleFullscreen() {
 
 /* 侧栏 */
 .sider {
-  background: linear-gradient(180deg, #0b1220 0%, #0e1726 100%);
+  background: linear-gradient(
+    180deg,
+    rgba(255, 255, 255, 0.78) 0%,
+    rgba(255, 255, 255, 0.56) 100%
+  );
+  backdrop-filter: var(--glass-blur);
+  border-right: 1px solid var(--border-light);
   transition: width 0.2s ease;
   overflow: hidden;
 }
@@ -250,26 +256,26 @@ function toggleFullscreen() {
   align-items: center;
   justify-content: center;
   gap: 10px;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  border-bottom: 1px solid var(--divider);
 }
 .logo-mark {
   width: 32px;
   height: 32px;
-  border-radius: 8px;
+  border-radius: 10px;
   display: flex;
   align-items: center;
   justify-content: center;
-  background: linear-gradient(135deg, #2f63ff, #6366f1);
+  background: var(--grad-brand);
   color: #fff;
   font-size: 18px;
   flex-shrink: 0;
-  box-shadow: 0 4px 12px rgba(47, 99, 255, 0.4);
+  box-shadow: 0 6px 16px rgba(74, 99, 240, 0.28);
 }
 .logo-text {
-  color: #fff;
+  color: var(--text-title);
   font-size: 15px;
   font-weight: 600;
-  letter-spacing: 0.5px;
+  letter-spacing: 0.3px;
   white-space: nowrap;
 }
 .sider :deep(.el-menu) { border-right: none; background: transparent; }
@@ -277,34 +283,35 @@ function toggleFullscreen() {
   height: 46px;
   line-height: 46px;
   margin: 2px 8px;
-  border-radius: 8px;
+  border-radius: 10px;
   border-left: 3px solid transparent;
   transition: background 0.18s ease, color 0.18s ease;
 }
 .sider :deep(.el-menu-item:hover) {
-  background: rgba(255, 255, 255, 0.06) !important;
-  color: #fff !important;
+  background: rgba(16, 24, 40, 0.045) !important;
+  color: var(--text-title) !important;
 }
 .sider :deep(.el-menu-item.is-active) {
-  background: rgba(47, 99, 255, 0.16) !important;
-  color: #fff !important;
+  background: rgba(74, 99, 240, 0.1) !important;
+  color: var(--color-primary) !important;
   font-weight: 600;
-  border-left-color: var(--color-primary);
+  border-left-color: transparent;
 }
 .sider :deep(.el-menu-item .el-icon) {
-  color: rgba(255, 255, 255, 0.55);
+  color: rgba(61, 71, 89, 0.55);
 }
 .sider :deep(.el-menu-item.is-active .el-icon) {
-  color: #fff;
+  color: var(--color-primary);
 }
 
 /* 顶栏 */
 .header {
-  background: #fff;
+  background: rgba(255, 255, 255, 0.72);
+  backdrop-filter: var(--glass-blur);
   display: flex;
   align-items: center;
   justify-content: space-between;
-  border-bottom: 1px solid var(--border);
+  border-bottom: 1px solid var(--divider);
   padding: 0 20px;
   height: 60px;
 }
@@ -355,7 +362,7 @@ function toggleFullscreen() {
 .user-info:hover { background: var(--bg-hover); }
 .username { font-size: 14px; color: var(--text-regular); }
 
-.main { background: var(--bg-app); padding: 20px; }
+.main { background: transparent; padding: 24px; }
 
 /* 消息通知 */
 .msg-pop .msg-header {

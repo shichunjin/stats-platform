@@ -85,7 +85,7 @@ const cards = computed(() => {
       title: isAdmin ? '待处理申请' : '我的申请',
       value: applyCount.value ?? '--',
       icon: 'Document',
-      color: 'linear-gradient(135deg,#2f63ff,#5b7bff)',
+      color: 'linear-gradient(135deg,#4a63f0,#7b8cf8)',
       path: isAdmin ? '/admin/pending-data' : '/user/my-requests',
     },
     {
@@ -151,7 +151,7 @@ async function connect() {
   justify-content: center;
   color: #fff;
   flex-shrink: 0;
-  box-shadow: 0 6px 16px rgba(15, 23, 42, 0.15);
+  box-shadow: 0 8px 20px rgba(74, 99, 240, 0.18);
 }
 .stat-value {
   font-size: 26px;
@@ -164,9 +164,9 @@ async function connect() {
   color: var(--text-secondary);
   margin-top: 4px;
 }
-.card { border-radius: var(--radius-lg); border: 1px solid var(--border-light); }
+.card { border-radius: var(--radius-2xl); border: 1px solid var(--border-light); }
 .card--clickable { cursor: pointer; transition: transform 0.18s ease, box-shadow 0.18s ease; }
-.card--clickable:hover { transform: translateY(-2px); box-shadow: 0 6px 20px rgba(15, 23, 42, 0.12); }
+.card--clickable:hover { transform: translateY(-3px); box-shadow: var(--shadow-card-hover); }
 .card-header {
   display: flex;
   align-items: center;

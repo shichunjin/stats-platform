@@ -55,9 +55,10 @@ function onClick(tab: any) {
 
 <style scoped>
 .tabs-bar {
-  background: #fff;
+  background: rgba(255, 255, 255, 0.5);
+  backdrop-filter: blur(14px);
   padding: 0 12px;
-  border-bottom: 1px solid var(--border);
+  border-bottom: 1px solid var(--divider);
 }
 .tabs-bar :deep(.el-tabs__header) {
   margin: 0;
@@ -93,7 +94,7 @@ function onClick(tab: any) {
   transition: background 0.18s ease;
 }
 .tabs-bar :deep(.el-tabs__item .is-icon-close:hover) {
-  background: rgba(0, 0, 0, 0.1);
+  background: rgba(16, 24, 40, 0.07);
   color: var(--color-danger);
 }
 </style>
