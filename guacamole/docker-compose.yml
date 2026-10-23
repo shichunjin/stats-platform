@@ -49,5 +49,9 @@ services:
       POSTGRESQL_DATABASE: ${POSTGRESQL_DATABASE:-guacamole_db}
       POSTGRESQL_USER: ${POSTGRESQL_USER:-guacamole_user}
       POSTGRESQL_PASSWORD: ${POSTGRES_PASSWORD}
+      # 令牌空闲有效期（分钟）：后端登录时换取 authToken 后直连桌面，
+      # 超过该时长令牌失效，需在 Guacamole 再登录一次。
+      # 需与后端 GUAC_TOKEN_TTL_SECONDS（默认 3540 秒）配套调整。
+      API_SESSION_TIMEOUT: ${API_SESSION_TIMEOUT:-60}
     depends_on:
       - guacd

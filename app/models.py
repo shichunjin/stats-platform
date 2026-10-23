@@ -116,6 +116,19 @@ class Message(Base):
     user = relationship("User")
 
 
+class GuacAuthToken(Base):
+    """Guacamole 免密直连令牌（登录时换取，按用户缓存）
+
+    仅保存 authToken 与过期时间，不保存用户密码；每次登录/改密会覆盖旧值，
+    过期后由连接接口自动清除并回退为 Guacamole 正常登录。
+    """
+    __tablename__ = "guac_auth_tokens"
+    user_id = Column(Integer, ForeignKey("users.id"), primary_key=True)
+    auth_token = Column(Text, nullable=False)
+    expires_at = Column(DateTime, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
 class PlatformConfig(Base):
     """平台连接配置（安全修复 C4：管理端「连接数据分析PC」保存真正落库）
 

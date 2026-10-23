@@ -9,6 +9,7 @@ from app.auth import (
     DEMO_ACCOUNTS,
 )
 from app.guac import upsert_guac_user
+from app.guac_token import remember_login_token
 from app.windows_account import sync_windows_user
 from app.rate_limit import rate_limit_auth, get_client_ip
 from app.schemas import (
@@ -154,6 +155,9 @@ def login(
     ))
     db.commit()
 
+    # 免密直连：顺带换取 Guacamole authToken（best-effort，失败不影响本次登录）
+    remember_login_token(db, user, req.password)
+
     return TokenResponse(access_token=token)
 
 
@@ -224,5 +228,8 @@ def change_password(
         ip_addr=get_client_ip(request),
     ))
     db.commit()
+
+    # 密码已更新，刷新免密直连令牌（best-effort，失败不影响改密结果）
+    remember_login_token(db, user, req.new_password)
 
     return {"message": "密码修改成功，Windows 云桌面与 Guacamole 登录密码已同步"}

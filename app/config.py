@@ -88,6 +88,19 @@ class Settings(BaseSettings):
     # 留空则不同步（本地开发/测试）。
     guac_db_url: str = ""
 
+    # ---- 免密直连（Guacamole authToken） ----
+    # 登录成功后由后端调用 Guacamole REST API 换取 authToken 并按用户缓存，
+    # 点击「连接数据分析PC」时跳转 .../#/client/{id}?token=... 跳过 Guacamole 登录页。
+    # 只缓存令牌、不保存用户密码；换取失败仅记日志，不影响平台登录。
+    # API 基址留空时由 GUACAMOLE_URL 推导（去掉 /#/client/ 后追加 /api）。
+    guacamole_api_url: str = ""
+    # 令牌缓存有效期（秒），应不大于 Guacamole 的 api-session-timeout
+    # （默认 900 秒即 15 分钟；如需长时免登需同时在 guacamole/docker-compose.yml
+    #  调大 API_SESSION_TIMEOUT）。过期后连接接口回退为普通地址，用户需在 Guacamole 登录一次。
+    guac_token_ttl_seconds: int = 3540
+    # 换取令牌的 HTTP 超时（秒），避免 Guacamole 不可用时拖慢平台登录
+    guac_token_timeout_seconds: float = 3.0
+
     # ---- 一人一专属 RDP 连接（启用 GUAC_DB_URL 时生效） ----
     # 专属连接名前缀，完整连接名 = 前缀 + 用户名
     guac_connection_prefix: str = "windows-"

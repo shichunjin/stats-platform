@@ -1,6 +1,7 @@
 """会话路由: POST /session/connect"""
 import logging
 import uuid
+from urllib.parse import quote
 from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.orm import Session
 from app.database import get_db
@@ -12,6 +13,7 @@ from app.schemas import SessionOut
 from app.guac import (
     guac_sync_enabled, get_user_connection_id, ensure_user_connection,
 )
+from app.guac_token import get_valid_auth_token
 from app.windows_account import (
     windows_sync_enabled, provision_user_workspace,
 )
@@ -33,7 +35,7 @@ router = APIRouter(prefix="/session", tags=["会话"])
 0. 幂等补建用户私有工作区（老账号补偿，best-effort）
 1. 查找（必要时补偿创建）该用户的专属 RDP 连接
 2. 创建会话记录（供审计）
-3. 返回带专属连接 ID 的 Guacamole URL
+3. 返回带专属连接 ID 的 Guacamole URL（登录时令牌有效则附带 token，跳过 Guacamole 登录页）
 
 **错误码**
 - `401`：未认证
@@ -93,6 +95,10 @@ def connect_session(
     db.refresh(session)
 
     guac_url = f"{settings.guacamole_url}{connection_ref}"
+    # 免密直连：登录时缓存的 authToken 未过期则直接跳过 Guacamole 登录页
+    auth_token = get_valid_auth_token(db, user.id)
+    if auth_token:
+        guac_url = f"{guac_url}?token={quote(auth_token)}"
 
     return SessionOut(
         id=session.id,
