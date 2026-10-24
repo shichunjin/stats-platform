@@ -128,9 +128,23 @@ export default [
     response: () => ({ pending: pendingFiles, published: publishedFiles }),
   },
   {
+    url: '/api/results/pending-files',
+    method: 'get',
+    response: () => ({
+      files: [
+        { file_name: 'result_summary.csv', file_size: 20480, modified_at: '2026-10-24T10:00:00', file_type: 'csv', already_requested: false, existing_status: null },
+        { file_name: 'analysis_report.xlsx', file_size: 153600, modified_at: '2026-10-24T09:30:00', file_type: 'xlsx', already_requested: false, existing_status: null },
+        { file_name: 'old_result.csv', file_size: 8192, modified_at: '2026-10-23T18:00:00', file_type: 'csv', already_requested: true, existing_status: 'pending' },
+      ],
+    }),
+  },
+  {
     url: '/api/results/request-export',
     method: 'post',
-    response: () => ({ registered: 1 }),
+    response: () => ({
+      registered: 1, files: [], auto_approved: 1, auto_files: [],
+      rejected: 0, rejected_files: [], skipped: [], not_found: [],
+    }),
   },
   {
     url: '/api/results/:id/download',

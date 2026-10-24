@@ -23,6 +23,7 @@ import shutil
 from datetime import datetime, timedelta
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import FileResponse
+from pydantic import BaseModel, Field
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from app.database import get_db
@@ -70,6 +71,12 @@ def pull_user_pending(user: User, local_dir: str) -> list[str]:
         download_file_from_windows(remote_dir, name, local_path)
         pulled.append(local_path)
     return pulled
+
+
+class RequestExportRequest(BaseModel):
+    """申请导出：用户勾选的文件名列表"""
+    file_names: list[str] = Field(..., min_length=1, max_length=200,
+                                  description="要导出的文件名（仅限本人待导出目录内的文件）")
 
 
 def _auto_publish(db: Session, pf: PendingFile, reason: str) -> ExportResult:
@@ -121,12 +128,70 @@ def get_my_results(
     }
 
 
-@router.post("/request-export", summary="申请导出结果", description="""
-**申请导出结果（普通用户）**
+@router.get("/pending-files", summary="扫描待导出目录", description="""
+**扫描本人待导出目录，供用户勾选要导出的文件**
+
+- 先经 SFTP 从 Windows 云平台的 `C:\\pending\\{用户名}` 增量回拉文件到服务器暂存；
+- 返回文件名、大小、修改时间、类型；
+- `already_requested=true` 表示该文件（同名同内容）已提交过申请（待审核/已通过），
+  前端应禁止重复勾选；`existing_status` 为已存在的申请状态，已驳回的文件可重新申请。
+
+返回结果按修改时间倒序排列。
+
+**错误码**
+- `401`：未认证
+- `502`：无法连接 Windows 云平台读取待导出目录
+""")
+def scan_pending_files(
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    pending_dir = _user_pending_dir(user.id)
+
+    try:
+        pull_user_pending(user, pending_dir)
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=502,
+            detail=f"无法从 Windows 云平台读取待导出文件: {str(e)}",
+        )
+
+    files: list[dict] = []
+    for fpath in scan_pending_directory(pending_dir):
+        fname = os.path.basename(fpath)
+        try:
+            st = os.stat(fpath)
+            sha = file_sha256(fpath)
+        except OSError:
+            continue
+        existing = db.query(PendingFile).filter(
+            PendingFile.user_id == user.id,
+            PendingFile.file_name == fname,
+            PendingFile.content_sha == sha,
+            PendingFile.status.in_(("pending", "approved")),
+        ).first()
+        _, ext = os.path.splitext(fname)
+        files.append({
+            "file_name": fname,
+            "file_size": st.st_size,
+            "modified_at": datetime.utcfromtimestamp(st.st_mtime).isoformat(),
+            "file_type": ext.lower().lstrip(".") or None,
+            "already_requested": existing is not None,
+            "existing_status": existing.status if existing else None,
+        })
+
+    files.sort(key=lambda x: x["modified_at"], reverse=True)
+    return {"files": files}
+
+
+@router.post("/request-export", summary="申请导出结果（按勾选文件）", description="""
+**申请导出结果（普通用户，按勾选文件）**
 
 先经 SFTP 从 Windows 云平台的 `C:\\pending\\{用户名}` 待导出目录增量回拉
-结果文件（**所有类型均可**），再扫描本地暂存目录逐个与原始数据集
-（testData.csv）做相似度比对：
+结果文件（**所有类型均可**），随后**仅处理请求体中 `file_names` 勾选的文件**，
+未勾选的文件不会被登记。再逐个与原始数据集（testData.csv）做相似度比对：
 
 - 相似度 **≥ 60%**（`EXPORT_REVIEW_SIMILARITY_THRESHOLD` 可调）：登记为
   「待审核」，管理员在 `/admin/pending` 中人工 approve / reject；
@@ -138,18 +203,32 @@ def get_my_results(
 - 原始数据基线缺失、二进制伪装文本、编码混淆无法判定时，安全默认转人工审核。
 
 返回 `registered`（需人工审核数）、`auto_approved`（免审自动通过数）、
-`rejected`（拒绝数）。
+`rejected`（拒绝数）、`skipped`（同名同内容已申请过而跳过）、
+`not_found`（勾选的文件在待导出目录中已不存在）。
 
 **错误码**
 - `401`：未认证
+- `422`：未选择有效文件
 - `502`：无法连接 Windows 云平台读取待导出目录
 """)
 def request_export(
+    req: RequestExportRequest,
     request: Request,
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
     client_ip = get_client_ip(request)
+
+    # 文件名安全校验：仅允许普通文件名，防止路径穿越读取目录外文件
+    requested: list[str] = []
+    for name in req.file_names:
+        name = name.strip()
+        if not name or name in (".", "..") or not _SAFE_REMOTE_NAME_RE.match(name):
+            continue
+        if name not in requested:
+            requested.append(name)
+    if not requested:
+        raise HTTPException(status_code=422, detail="请选择要导出的文件")
 
     pending_dir = _user_pending_dir(user.id)
 
@@ -164,7 +243,11 @@ def request_export(
             detail=f"无法从 Windows 云平台读取待导出文件: {str(e)}",
         )
 
-    files = scan_pending_directory(pending_dir)
+    # 只处理勾选的文件；目录中已不存在的文件单独返回，便于前端提示
+    available = {os.path.basename(p): p for p in scan_pending_directory(pending_dir)}
+    files = [available[n] for n in requested if n in available]
+    not_found = [n for n in requested if n not in available]
+    skipped: list[str] = []
 
     need_review: list[dict] = []
     auto_approved: list[dict] = []
@@ -182,6 +265,7 @@ def request_export(
             PendingFile.status.in_(("pending", "approved")),
         ).first()
         if existing:
+            skipped.append(fname)
             continue
 
         _, ext = os.path.splitext(fname)
@@ -272,6 +356,8 @@ def request_export(
         "auto_files": auto_approved,
         "rejected": len(rejected),
         "rejected_files": rejected,
+        "skipped": skipped,
+        "not_found": not_found,
     }
 
 

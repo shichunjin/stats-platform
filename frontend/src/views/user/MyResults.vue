@@ -6,7 +6,7 @@
           <div class="page-header__title">我的结果文件</div>
           <div class="page-header__desc">查看已发布结果与导出申请的审核状态</div>
         </div>
-        <el-button type="primary" @click="onExport">
+        <el-button type="primary" @click="openExportDialog">
           <el-icon><Upload /></el-icon>&nbsp;申请导出结果
         </el-button>
       </div>
@@ -21,7 +21,7 @@
           （即 <code>\\127.0.0.1\pending\你的用户名</code>，仅本人可写），
           <b>只有放进该目录的文件才能申请导出</b>；
         </li>
-        <li>回到平台本页，点击右上角「申请导出结果」，系统登记待导出文件并自动审查；</li>
+        <li>回到平台本页，点击右上角「申请导出结果」，在弹出的文件列表中<b>勾选</b>需要导出的文件后提交审查；</li>
         <li>
           审查规则：与原始数据相似度低于 60% 且通过敏感信息检查的文本/图片文件
           <b>免审自动发布</b>；高相似度文件、统计软件原生格式/压缩包/文档
@@ -104,6 +104,66 @@
         <el-empty v-if="!loading && !pending.length" description="暂无导出申请" />
       </el-tab-pane>
     </el-tabs>
+
+    <!-- 申请导出：扫描待导出目录，由用户勾选文件 -->
+    <el-dialog
+      v-model="exportDialogVisible"
+      title="选择要导出的文件"
+      width="760px"
+      :close-on-click-modal="false"
+    >
+      <el-alert
+        type="info" :closable="false" show-icon class="export-dialog__tip"
+        title="以下文件来自 Windows 云桌面的「待导出目录」。勾选后提交审查；已申请过（同名同内容）的文件不可重复勾选。"
+      />
+      <el-table
+        :data="scanFiles"
+        v-loading="scanning"
+        stripe
+        height="360"
+        @selection-change="onSelectionChange"
+      >
+        <el-table-column type="selection" width="46" :selectable="selectable" />
+        <el-table-column label="文件名" min-width="260" show-overflow-tooltip>
+          <template #default="{ row }">
+            <span class="file-cell">
+              <el-icon class="file-icon"><Document /></el-icon>
+              {{ row.file_name }}
+            </span>
+          </template>
+        </el-table-column>
+        <el-table-column label="大小" width="100">
+          <template #default="{ row }">{{ formatSize(row.file_size) }}</template>
+        </el-table-column>
+        <el-table-column label="修改时间" width="160">
+          <template #default="{ row }">{{ formatTime(row.modified_at) }}</template>
+        </el-table-column>
+        <el-table-column label="状态" width="130">
+          <template #default="{ row }">
+            <span v-if="row.existing_status === 'pending'" class="tag tag-pending">已申请待审核</span>
+            <span v-else-if="row.existing_status === 'approved'" class="tag tag-auto">已通过</span>
+            <span v-else-if="row.existing_status === 'rejected'" class="tag tag-reject">已驳回，可重提</span>
+            <span v-else class="tag tag-done">可申请</span>
+          </template>
+        </el-table-column>
+        <template #empty>
+          <el-empty
+            description="待导出目录中没有文件，请先在 Windows 云桌面把结果保存到「待导出目录」"
+            :image-size="70"
+          />
+        </template>
+      </el-table>
+      <template #footer>
+        <span class="export-dialog__count">已选 {{ selectedFiles.length }} 个</span>
+        <el-button @click="exportDialogVisible = false">取消</el-button>
+        <el-button
+          type="primary"
+          :loading="exporting"
+          :disabled="!selectedFiles.length"
+          @click="submitExport"
+        >提交导出申请</el-button>
+      </template>
+    </el-dialog>
   </el-card>
 </template>
 
@@ -112,7 +172,10 @@ import { onMounted, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import { Upload, Document } from '@element-plus/icons-vue'
 import type { PendingFile, ExportResult } from '@/types'
-import { getMyResults, requestExport, downloadResult } from '@/api/results'
+import {
+  getMyResults, requestExport, downloadResult, scanPendingFiles,
+  type PendingScanFile,
+} from '@/api/results'
 
 const pending = ref<PendingFile[]>([])
 const published = ref<ExportResult[]>([])
@@ -134,23 +197,60 @@ async function load() {
   }
 }
 
-async function onExport() {
+// ---- 申请导出：扫描待导出目录后由用户勾选 ----
+const exportDialogVisible = ref(false)
+const scanning = ref(false)
+const exporting = ref(false)
+const scanFiles = ref<PendingScanFile[]>([])
+const selectedFiles = ref<PendingScanFile[]>([])
+
+async function openExportDialog() {
+  exportDialogVisible.value = true
+  selectedFiles.value = []
+  scanFiles.value = []
+  scanning.value = true
   try {
-    const res = await requestExport()
-    const total = res.registered + res.auto_approved
-    if (total === 0) {
-      ElMessage.warning('没有新的结果文件可申请（请先在 Windows 平台保存结果到待导出目录）')
-      return
+    const res = await scanPendingFiles()
+    scanFiles.value = res.files
+  } catch {
+    /* 拦截器处理 */
+  } finally {
+    scanning.value = false
+  }
+}
+
+// 已提交过（待审核/已通过）的文件不可重复勾选；已驳回的允许重新申请
+function selectable(row: PendingScanFile) {
+  return !row.already_requested
+}
+
+function onSelectionChange(rows: PendingScanFile[]) {
+  selectedFiles.value = rows
+}
+
+async function submitExport() {
+  if (!selectedFiles.value.length) return
+  exporting.value = true
+  try {
+    const res = await requestExport(selectedFiles.value.map(f => f.file_name))
+    const parts: string[] = []
+    if (res.auto_approved > 0) parts.push(`${res.auto_approved} 个文件免审核已发布，可直接下载`)
+    if (res.registered > 0) parts.push(`${res.registered} 个文件需管理员审核`)
+    if (res.rejected > 0) parts.push(`${res.rejected} 个文件不允许导出，已拒绝`)
+    if (res.skipped.length) parts.push(`${res.skipped.length} 个文件已申请过，已跳过`)
+    if (res.not_found.length) parts.push(`${res.not_found.length} 个文件已不在待导出目录`)
+
+    if (parts.length) {
+      ElMessage.success(parts.join('；'))
+    } else {
+      ElMessage.warning('没有新的文件被登记')
     }
-    if (res.auto_approved > 0) {
-      ElMessage.success(`${res.auto_approved} 个文件与原始数据相似度低于 60%，已免审核发布，可直接下载`)
-    }
-    if (res.registered > 0) {
-      ElMessage.warning(`${res.registered} 个文件与原始数据相似度达到 60% 以上，需管理员审核后才能下载`)
-    }
+    exportDialogVisible.value = false
     load()
   } catch {
     /* 拦截器处理 */
+  } finally {
+    exporting.value = false
   }
 }
 
@@ -215,6 +315,8 @@ function statusText(s: string) {
   line-height: 18px;
 }
 .tab-badge { margin-left: 6px; }
+.export-dialog__tip { margin-bottom: 12px; }
+.export-dialog__count { float: left; line-height: 32px; font-size: var(--fs-sm); color: var(--text-secondary); }
 .export-guide { margin-bottom: 16px; border-radius: var(--radius-lg); }
 .export-guide__steps { margin: 6px 0 0; padding-left: 18px; }
 .export-guide__steps li { margin: 4px 0; line-height: 1.7; font-size: var(--fs-sm); color: var(--text-primary); }

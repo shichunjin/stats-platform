@@ -46,5 +46,13 @@ export const useTabsStore = defineStore('tabs', () => {
     active.value = path
   }
 
-  return { tabs, active, cached, addTab, removeTab, setActive }
+  // 退出登录/切换账号时调用：清空上一用户的标签页与缓存页面，
+  // 防止上一个用户打开的标签残留到新用户的导航栏。
+  function resetTabs() {
+    tabs.value = [{ path: '/dashboard', title: '首页', name: 'Dashboard', affix: true }]
+    active.value = '/dashboard'
+    cached.value = ['Dashboard']
+  }
+
+  return { tabs, active, cached, addTab, removeTab, setActive, resetTabs }
 })
