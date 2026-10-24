@@ -58,6 +58,17 @@
               <el-form-item prop="password">
                 <el-input v-model="regForm.password" type="password" placeholder="密码（8-64位，大写/小写/数字/符号至少三类）" show-password :prefix-icon="Lock" size="large" />
               </el-form-item>
+              <el-form-item prop="confirm_password">
+                <el-input
+                  v-model="regForm.confirm_password"
+                  type="password"
+                  placeholder="请再次输入密码"
+                  show-password
+                  :prefix-icon="Lock"
+                  size="large"
+                  @keyup.enter="onRegister"
+                />
+              </el-form-item>
               <el-form-item prop="display_name">
                 <el-input v-model="regForm.display_name" placeholder="显示名称（可选）" :prefix-icon="UserFilled" size="large" />
               </el-form-item>
@@ -90,7 +101,7 @@ const loading = ref(false)
 const regLoading = ref(false)
 
 const loginForm = reactive({ username: '', password: '' })
-const regForm = reactive({ username: '', password: '', display_name: '' })
+const regForm = reactive({ username: '', password: '', confirm_password: '', display_name: '' })
 
 const loginFormRef = ref<FormInstance>()
 const regFormRef = ref<FormInstance>()
@@ -111,6 +122,15 @@ const regRules: FormRules = {
       validator: (_r, v, cb) => {
         const err = checkPasswordStrength(v, regForm.username)
         err ? cb(new Error(err)) : cb()
+      },
+      trigger: 'blur',
+    },
+  ],
+  confirm_password: [
+    { required: true, message: '请再次输入密码', trigger: 'blur' },
+    {
+      validator: (_r, v, cb) => {
+        v !== regForm.password ? cb(new Error('两次输入的密码不一致')) : cb()
       },
       trigger: 'blur',
     },

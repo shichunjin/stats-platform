@@ -20,7 +20,7 @@
             </span>
           </template>
         </el-table-column>
-        <el-table-column label="操作" width="150" fixed="right">
+        <el-table-column label="操作" width="220" fixed="right">
           <template #default="{ row }">
             <el-button
               v-if="row.role === 'user'"
@@ -37,17 +37,54 @@
             <el-tooltip v-else content="超级管理员账号仅能通过服务器本地命令管理" placement="left">
               <span class="op-disabled">—</span>
             </el-tooltip>
+            <el-button
+              v-if="row.role !== 'superadmin'"
+              type="info" link size="small"
+              @click="openReset(row)"
+            >重置密码</el-button>
           </template>
         </el-table-column>
       </el-table>
     </el-card>
+
+    <el-dialog v-model="pwdDialogVisible" title="重置用户密码" width="460px" :close-on-click-modal="false">
+      <el-form ref="pwdFormRef" :model="pwdForm" :rules="pwdRules" label-width="90px">
+        <el-form-item label="用户">
+          <span>{{ pwdTarget?.username }}</span>
+        </el-form-item>
+        <el-form-item label="新密码" prop="new_password">
+          <el-input
+            v-model="pwdForm.new_password"
+            type="password" show-password autocomplete="new-password"
+            placeholder="8-64 位，大写/小写/数字/符号至少三类"
+          />
+        </el-form-item>
+        <el-form-item label="确认密码" prop="confirm_password">
+          <el-input
+            v-model="pwdForm.confirm_password"
+            type="password" show-password autocomplete="new-password"
+            placeholder="请再次输入新密码"
+            @keyup.enter="submitReset"
+          />
+        </el-form-item>
+        <el-alert
+          type="warning" :closable="false" show-icon
+          title="重置后该用户需用新密码重新登录，Windows 云桌面与 Guacamole 密码将同步更新"
+        />
+      </el-form>
+      <template #footer>
+        <el-button @click="pwdDialogVisible = false">取消</el-button>
+        <el-button type="primary" :loading="resetting" @click="submitReset">确认重置</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
-import { ElMessage, ElMessageBox } from 'element-plus'
-import { getManageUsers, updateUserRole } from '@/api/admin'
+import { onMounted, reactive, ref } from 'vue'
+import { ElMessage, ElMessageBox, type FormInstance, type FormRules } from 'element-plus'
+import { getManageUsers, updateUserRole, resetUserPassword } from '@/api/admin'
+import { checkPasswordStrength } from '@/utils'
 import type { User, UserRole } from '@/types'
 
 const users = ref<User[]>([])
@@ -83,6 +120,57 @@ async function changeRole(row: User, target: 'user' | 'admin') {
     ElMessage.error(e?.response?.data?.detail || '角色变更失败')
   } finally {
     actingId.value = null
+  }
+}
+
+/* ---- 重置密码 ---- */
+const pwdDialogVisible = ref(false)
+const pwdTarget = ref<User | null>(null)
+const pwdForm = reactive({ new_password: '', confirm_password: '' })
+const pwdFormRef = ref<FormInstance>()
+const resetting = ref(false)
+
+const pwdRules: FormRules = {
+  new_password: [
+    { required: true, message: '请输入新密码', trigger: 'blur' },
+    {
+      validator: (_r, v, cb) => {
+        const err = checkPasswordStrength(v, pwdTarget.value?.username)
+        err ? cb(new Error(err)) : cb()
+      },
+      trigger: 'blur',
+    },
+  ],
+  confirm_password: [
+    { required: true, message: '请再次输入新密码', trigger: 'blur' },
+    {
+      validator: (_r, v, cb) => {
+        v !== pwdForm.new_password ? cb(new Error('两次输入的密码不一致')) : cb()
+      },
+      trigger: 'blur',
+    },
+  ],
+}
+
+function openReset(row: User) {
+  pwdTarget.value = row
+  pwdForm.new_password = ''
+  pwdForm.confirm_password = ''
+  pwdDialogVisible.value = true
+}
+
+async function submitReset() {
+  const valid = await pwdFormRef.value?.validate().catch(() => false)
+  if (!valid || !pwdTarget.value) return
+  resetting.value = true
+  try {
+    await resetUserPassword(pwdTarget.value.id, pwdForm.new_password)
+    ElMessage.success(`已重置用户 ${pwdTarget.value.username} 的密码`)
+    pwdDialogVisible.value = false
+  } catch (e: any) {
+    ElMessage.error(e?.response?.data?.detail || '重置密码失败')
+  } finally {
+    resetting.value = false
   }
 }
 

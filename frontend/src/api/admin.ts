@@ -30,6 +30,14 @@ export function updateUserRole(userId: number, role: 'user' | 'admin') {
   return request.put<unknown, User>(`/admin/manage/users/${userId}/role`, { role })
 }
 
+// 重置用户密码（仅超级管理员）：同步更新 Windows 云桌面与 Guacamole
+export function resetUserPassword(userId: number, newPassword: string) {
+  return request.post<unknown, { message: string }>(
+    `/admin/manage/users/${userId}/reset-password`,
+    { new_password: newPassword },
+  )
+}
+
 // ---- 数据申请（前端模型，对应 mock） ----
 export function getDataApplies(status?: string) {
   return request.get<unknown, DataApply[]>('/admin/data-applies', { params: { status } })

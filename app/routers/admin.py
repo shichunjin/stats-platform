@@ -3,11 +3,16 @@ import os
 import shutil
 import ipaddress
 from fastapi import APIRouter, Depends, Query, HTTPException, Request
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 from app.database import get_db
 from app.models import User, AuditLog, PendingFile, ExportResult, PlatformConfig
-from app.auth import get_current_user, require_admin, require_superadmin
+from app.auth import (
+    get_current_user, require_admin, require_superadmin,
+    hash_password, validate_password_strength, DEMO_ACCOUNTS,
+)
+from app.guac import upsert_guac_user
+from app.windows_account import sync_windows_user
 from app.config import settings
 from app.rate_limit import get_client_ip
 from app.review import file_sha256
@@ -471,6 +476,12 @@ class RoleUpdateRequest(BaseModel):
     role: str
 
 
+class ResetPasswordRequest(BaseModel):
+    """重置用户密码的请求体（仅超级管理员）"""
+    new_password: str = Field(..., min_length=8, max_length=64,
+                              description="新密码（8-64 字符，大写/小写/数字/符号至少三类，不含用户名）")
+
+
 @router.get("/manage/users", response_model=list[UserAdminOut],
             summary="用户列表（角色管理）", description="""
 **查看全部用户及其角色（仅超级管理员）**
@@ -544,3 +555,69 @@ def update_user_role(
     db.commit()
     db.refresh(user)
     return user
+
+
+@router.post("/manage/users/{user_id}/reset-password", summary="重置用户密码", description="""
+**超级管理员重置指定用户密码**
+
+- 仅超级管理员可调用
+- 新密码须满足与注册/改密一致的强度策略（8-64 字符，大写/小写/数字/符号至少三类，不含用户名）
+- 重置时同步更新 Windows 云主机本地账号与 Guacamole 账号密码，三端保持一致；
+  任一步失败则平台密码不变（`502`）
+- 重置后目标用户旧 JWT 立即失效（`password_version` +1），需用新密码重新登录
+
+**限制**
+- 不能重置超级管理员账号（超管密码只能本人修改）
+- 不能重置演示账号（密码由环境变量管理）
+
+**错误码**
+- `400`：目标为超级管理员/演示账号
+- `401`：未认证
+- `403`：非超级管理员
+- `404`：用户不存在
+- `422`：新密码不符合强度策略
+- `502`：Windows 或 Guacamole 密码同步失败（平台密码未修改）
+""")
+def reset_user_password(
+    user_id: int,
+    req: ResetPasswordRequest,
+    request: Request,
+    admin: User = Depends(require_superadmin),
+    db: Session = Depends(get_db),
+):
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="用户不存在")
+    if user.role == "superadmin":
+        raise HTTPException(status_code=400, detail="超级管理员账号密码只能由本人通过「修改密码」更新")
+    if user.username in DEMO_ACCOUNTS:
+        raise HTTPException(status_code=400, detail="演示账号密码由环境变量管理，不能重置")
+
+    try:
+        validate_password_strength(req.new_password, user.username)
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+
+    # 三端一致：先外部（Windows → Guacamole），全部成功后才改平台密码
+    try:
+        sync_windows_user(user.username, req.new_password)
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"{e}（平台密码未修改）")
+
+    try:
+        upsert_guac_user(user.username, req.new_password)
+    except Exception as e:
+        raise HTTPException(status_code=502,
+                            detail=f"Guacamole 密码同步失败，平台密码未修改: {e}")
+
+    user.password_hash = hash_password(req.new_password)
+    user.password_version = (user.password_version or 1) + 1
+    db.add(AuditLog(
+        user_id=admin.id,
+        action="reset_password",
+        detail=f"超级管理员 {admin.username}(id={admin.id}) 重置用户 {user.username}(id={user.id}) 的密码",
+        ip_addr=get_client_ip(request),
+    ))
+    db.commit()
+
+    return {"message": f"已重置用户 {user.username} 的密码，Windows 云桌面与 Guacamole 已同步"}
