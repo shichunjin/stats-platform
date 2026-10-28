@@ -27,4 +27,8 @@ export default defineConfig({
       },
     },
   },
+  build: {
+    // Element Plus 等依赖打包后主 chunk 约 1.27MB，调高告警阈值避免构建输出噪音
+    chunkSizeWarningLimit: 1500,
+  },
 })

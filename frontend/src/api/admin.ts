@@ -43,6 +43,11 @@ export function getDataApplies(status?: string) {
   return request.get<unknown, DataApply[]>('/admin/data-applies', { params: { status } })
 }
 
+// 单条申请详情（进入筛选生成页时带入用户填写的筛选条件）
+export function getDataApply(id: number) {
+  return request.get<unknown, DataApply>(`/admin/data-applies/${id}`)
+}
+
 export function rejectDataApply(id: number, reason: string) {
   return request.post<unknown, DataApply>(`/admin/data-applies/${id}/reject`, { reason })
 }

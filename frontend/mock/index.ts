@@ -34,7 +34,7 @@ const mockColumns = [
 ]
 
 const mockApplies = [
-  { id: 1001, data_name: 'testData', purpose: '硕士论文研究', fields: ['age33', 'ADHD36'], time_range: null, priority: 'high', status: 'pending', apply_time: now, target_user_id: 2, username: 'student1', display_name: '张同学' },
+  { id: 1001, data_name: 'testData', purpose: '硕士论文研究', fields: ['age33', 'ADHD36'], filters: { sex33: [1], age33: [20, 35], 姓名: '张' }, time_range: null, priority: 'high', status: 'pending', apply_time: now, target_user_id: 2, username: 'student1', display_name: '张同学' },
   { id: 1002, data_name: 'testData', purpose: '课题数据分析', fields: ['sex33', 'education33'], priority: 'medium', status: 'processing', apply_time: now, target_user_id: 3, username: 'student2', display_name: '李同学' },
   { id: 1003, data_name: 'testData', purpose: '课程作业', fields: ['age33'], priority: 'low', status: 'completed', apply_time: now, finish_time: now, target_user_id: 2, username: 'student1', display_name: '张同学' },
   { id: 1004, data_name: 'testData', purpose: '探索性分析', fields: ['BMI值33'], priority: 'low', status: 'rejected', reject_reason: '字段选择过少', apply_time: now, target_user_id: 3, username: 'student2', display_name: '李同学' },
@@ -194,6 +194,11 @@ export default [
     url: '/api/admin/data-applies',
     method: 'get',
     response: () => mockApplies,
+  },
+  {
+    url: '/api/admin/data-applies/:id',
+    method: 'get',
+    response: ({ query }: any) => mockApplies.find((x) => x.id === Number(query.id)) || {},
   },
   {
     url: '/api/admin/data-applies/:id/reject',

@@ -10,7 +10,11 @@
           :prefix-icon="Search"
           style="width: 260px"
         />
-        <span class="toolbar-tip">共 {{ columns.length }} 个条件，默认展示前 {{ VISIBLE_LIMIT }} 个</span>
+        <span class="toolbar-tip">
+          {{ focusSet.size
+            ? `已带入申请筛选条件 ${visibleColumns.length} 项，其余条件可展开添加`
+            : `共 ${columns.length} 个条件，默认展示前 ${VISIBLE_LIMIT} 个` }}
+        </span>
       </div>
       <div class="toolbar-right">
         <el-badge :value="selectedCount" class="selected-badge">
@@ -191,6 +195,10 @@ import type { DataColumn } from '@/types'
 
 const props = defineProps<{
   columns: DataColumn[]
+  // 预设筛选条件（如数据申请中用户填写的条件），按列控件类型回填
+  initialFilters?: Record<string, any>
+  // 主区域只展示这些列（其余放入「更多筛选条件」）；为空时保持默认前 N 个的展示逻辑
+  focusColumns?: string[]
 }>()
 
 const emit = defineEmits<{
@@ -210,6 +218,8 @@ const dateRange = reactive<Record<string, [string, string] | null>>({})
 
 const keyword = ref('')
 const expanded = ref(false)
+// 预设条件只回填一次，避免父组件后续刷新覆盖管理员的编辑
+const presetApplied = ref(false)
 
 // 按关键词过滤后的列（名称模糊匹配）
 const matchedColumns = computed(() => {
@@ -218,9 +228,59 @@ const matchedColumns = computed(() => {
   return props.columns.filter((c) => c.name.toLowerCase().includes(kw))
 })
 
-// 搜索时在全部命中里取前 20，未搜索时取原始顺序前 20
-const visibleColumns = computed(() => matchedColumns.value.slice(0, VISIBLE_LIMIT))
-const moreColumns = computed(() => matchedColumns.value.slice(VISIBLE_LIMIT))
+// 聚焦模式：主区域只展示申请中用户填写的条件
+const focusSet = computed(() => new Set(props.focusColumns || []))
+
+// 搜索时在全部命中里取前 20，未搜索时取原始顺序前 20；
+// 聚焦模式（申请带条件）下主区域只显示用户填写的列，其余全部折叠
+const visibleColumns = computed(() => {
+  if (focusSet.value.size) {
+    return matchedColumns.value.filter((c) => focusSet.value.has(c.name))
+  }
+  return matchedColumns.value.slice(0, VISIBLE_LIMIT)
+})
+const moreColumns = computed(() => {
+  if (focusSet.value.size) {
+    return matchedColumns.value.filter((c) => !focusSet.value.has(c.name))
+  }
+  return matchedColumns.value.slice(VISIBLE_LIMIT)
+})
+
+// 回填预设筛选条件（按列控件类型写入对应模型）
+function applyInitialFilters() {
+  if (presetApplied.value) return
+  const preset = props.initialFilters
+  if (!preset || !Object.keys(preset).length || !props.columns.length) return
+  props.columns.forEach((col) => {
+    if (!(col.name in preset)) return
+    const val = preset[col.name]
+    if (val === undefined || val === null || val === '') return
+    if (col.control === 'select') {
+      model[col.name] = Array.isArray(val) ? [...val] : [val]
+    } else if (col.control === 'range') {
+      if (Array.isArray(val) && val.length === 2) {
+        if (val[0] !== null && val[0] !== undefined) rangeMin[col.name] = val[0]
+        if (val[1] !== null && val[1] !== undefined) rangeMax[col.name] = val[1]
+      }
+      model[col.name] = Array.isArray(val) ? [...val] : val
+    } else if (col.control === 'daterange') {
+      if (Array.isArray(val) && val.length === 2) {
+        dateRange[col.name] = [val[0], val[1]]
+        model[col.name] = [val[0], val[1]]
+      }
+    } else {
+      model[col.name] = val
+    }
+  })
+  presetApplied.value = true
+  emitChange()
+}
+
+watch(
+  [() => props.columns, () => props.initialFilters],
+  applyInitialFilters,
+  { immediate: true, deep: true },
+)
 
 function toggleMore() {
   expanded.value = !expanded.value

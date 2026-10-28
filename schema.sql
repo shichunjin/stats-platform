@@ -139,6 +139,7 @@ CREATE TABLE data_applies (
     data_name    VARCHAR(128) DEFAULT 'testData',
     purpose      TEXT NOT NULL,
     fields       JSONB,                           -- 所需字段列表
+    filters      JSONB,                           -- 用户填写的筛选条件（列名 -> 值/[min,max]/模糊文本）
     time_start   TIMESTAMPTZ,                     -- 时间范围起
     time_end     TIMESTAMPTZ,                     -- 时间范围止
     priority     VARCHAR(16) DEFAULT 'medium',    -- low | medium | high

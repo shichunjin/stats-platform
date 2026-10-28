@@ -89,6 +89,7 @@ class DataApply(Base):
     data_name = Column(String(128), default="testData")
     purpose = Column(Text, nullable=False)
     fields = Column(JSON)                # 所需字段列表
+    filters = Column(JSON)               # 用户提交的筛选条件（列名 -> 值/[min,max]/模糊文本）
     time_start = Column(DateTime)        # 时间范围起
     time_end = Column(DateTime)          # 时间范围止
     priority = Column(String(16), default="medium")   # low | medium | high

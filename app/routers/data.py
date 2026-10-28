@@ -41,8 +41,8 @@ def fetch_data(
     )
 
 
-@router.get("/columns", summary="获取数据表列结构（智能筛选控件元数据，管理员）", description="""
-**分析 test_data 宽表的列结构，供前端「数据筛选与生成」页智能渲染控件**
+@router.get("/columns", summary="获取数据表列结构（智能筛选控件元数据）", description="""
+**分析 test_data 宽表的列结构，供用户「申请获取数据」页与管理员「数据筛选与生成」页智能渲染控件**
 
 - 枚举值少（≤10）的列 → `control=select`，返回 `options`
 - 数值列 → `control=range`，返回 `min/max`
@@ -50,7 +50,7 @@ def fetch_data(
 - 结果按行数缓存，数据变化后自动刷新
 """)
 def get_columns(
-    admin: User = Depends(require_admin),
+    user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
     try:

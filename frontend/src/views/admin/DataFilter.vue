@@ -33,8 +33,24 @@
 
       <!-- 智能筛选控件 -->
       <div v-loading="colsLoading">
-        <SmartFilter ref="filterRef" :columns="columns" @change="onFilterChange" />
+        <SmartFilter
+          ref="filterRef"
+          :columns="columns"
+          :initial-filters="presetFilters"
+          :focus-columns="presetColumns"
+          @change="onFilterChange"
+        />
       </div>
+
+      <el-alert
+        v-if="presetCount"
+        type="info"
+        :closable="false"
+        show-icon
+        style="margin-top: 16px"
+        :title="`已自动带入用户申请中填写的 ${presetCount} 项筛选条件`"
+        description="如需追加条件，点击上方「展开更多筛选条件」手动补充；生成时将以当前全部条件为准"
+      />
 
       <el-alert v-if="!applyId" type="warning" :closable="false" show-icon style="margin-top: 16px"
                 title="未关联数据申请：请从「待处理申请」页面点击「筛选生成」进入本页，生成数据必须绑定用户申请" />
@@ -74,26 +90,31 @@
 </template>
 
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { useRoute } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import SmartFilter from '@/components/SmartFilter.vue'
 import { getColumns, generateFilteredData } from '@/api/data'
-import { getUsers } from '@/api/admin'
-import type { DataColumn } from '@/types'
+import { getUsers, getDataApply } from '@/api/admin'
+import type { DataColumn, User } from '@/types'
 
 const route = useRoute()
 const applyId = route.query.applyId as string | undefined
 
 const columns = ref<DataColumn[]>([])
 const colsLoading = ref(false)
-const users = ref<{ id: number; username: string; display_name?: string }[]>([])
+const users = ref<User[]>([])
 const targetUserId = ref<number | undefined>(Number(route.query.userId) || undefined)
 const filename = ref('')
 const generating = ref(false)
 const filters = ref<Record<string, any>>({})
 const lastResult = ref<{ filename: string } | null>(null)
 const errorLog = ref<{ time: string; message: string }[]>([])
+
+// 申请中用户填写的筛选条件（进入页面时自动带入，主区域仅展示这些条件）
+const presetFilters = ref<Record<string, any>>({})
+const presetColumns = computed(() => Object.keys(presetFilters.value))
+const presetCount = computed(() => presetColumns.value.length)
 
 const filterRef = ref<InstanceType<typeof SmartFilter>>()
 
@@ -110,6 +131,15 @@ onMounted(async () => {
     users.value = await getUsers()
   } catch {
     /* 拦截器处理 */
+  }
+  // 从「待处理申请」进入时，带入用户提交的筛选条件
+  if (applyId) {
+    try {
+      const apply = await getDataApply(Number(applyId))
+      presetFilters.value = apply.filters || {}
+    } catch {
+      /* 拦截器处理 */
+    }
   }
 })
 

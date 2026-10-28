@@ -53,6 +53,15 @@ def _migrate_schema():
             ))
             conn.commit()
 
+    # 数据申请携带筛选条件（用户提交申请时填写，管理员分配数据时自动带入）
+    if "data_applies" in insp.get_table_names():
+        cols = [c["name"] for c in insp.get_columns("data_applies")]
+        if "filters" not in cols:
+            with engine.connect() as conn:
+                conn.execute(text("ALTER TABLE data_applies ADD COLUMN filters JSON"))
+                conn.commit()
+            logger.info("已迁移: data_applies 表新增 filters 列")
+
     # 软件维度下线：移除 sessions.software（原 RStudio/Mplus/Stata 专用字段）
     if "sessions" in insp.get_table_names():
         cols = [c["name"] for c in insp.get_columns("sessions")]

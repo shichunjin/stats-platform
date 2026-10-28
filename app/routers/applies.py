@@ -36,6 +36,7 @@ def _to_dict(a: DataApply) -> dict:
         "data_name": a.data_name,
         "purpose": a.purpose,
         "fields": a.fields or [],
+        "filters": a.filters or {},
         "time_range": [
             a.time_start.isoformat() if a.time_start else None,
             a.time_end.isoformat() if a.time_end else None,
@@ -72,6 +73,7 @@ def create_apply(
         data_name="testData",
         purpose=payload.purpose,
         fields=payload.fields,
+        filters=payload.filters or {},
         time_start=time_start,
         time_end=time_end,
         priority=priority,
@@ -124,6 +126,19 @@ def admin_list_applies(
         DataApply.created_at.desc(), DataApply.id.desc()
     ).offset(skip).limit(limit).all()  # 性能修复 C2：分页
     return [_to_dict(a) for a in rows]
+
+
+@router.get("/admin/data-applies/{apply_id}", summary="数据申请详情（管理员）")
+def admin_get_apply(
+    apply_id: int,
+    admin: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    """单条申请详情：管理员从「待处理申请」进入筛选生成页时带入用户填写的筛选条件。"""
+    apply_obj = db.query(DataApply).filter(DataApply.id == apply_id).first()
+    if apply_obj is None:
+        raise HTTPException(status_code=404, detail="申请不存在")
+    return _to_dict(apply_obj)
 
 
 @router.post("/admin/data-applies/{apply_id}/process", summary="申请进入处理中（管理员）")

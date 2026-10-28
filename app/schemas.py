@@ -134,6 +134,7 @@ class DataApplyCreate(BaseModel):
     fields: List[str] = Field(default_factory=list, description="所需字段")
     time_range: Optional[List[Optional[str]]] = Field(None, description="[起始时间, 结束时间] ISO 字符串")
     priority: str = Field("medium", description="优先级：low/medium/high")
+    filters: dict = Field(default_factory=dict, description="筛选条件：列名 -> 值/[min,max]/模糊文本")
 
 
 class DataApplyOut(BaseModel):
@@ -141,6 +142,7 @@ class DataApplyOut(BaseModel):
     data_name: str
     purpose: str
     fields: List[str] = Field(default_factory=list)
+    filters: dict = Field(default_factory=dict)
     time_range: Optional[List[Optional[str]]] = None
     priority: str
     status: str

@@ -34,7 +34,7 @@
     </template>
 
     <el-table :data="pagedList" v-loading="loading" stripe @selection-change="onSelection" @sort-change="onSort">
-      <el-table-column type="selection" width="48" :selectable="(row) => !['completed', 'generating'].includes(row.status)" />
+      <el-table-column type="selection" width="48" :selectable="(row: DataApply) => !['completed', 'generating'].includes(row.status)" />
       <el-table-column prop="id" label="申请ID" width="80" sortable="custom" />
       <el-table-column label="申请人" width="110">
         <template #default="{ row }">{{ row.display_name || row.username || `用户${row.target_user_id ?? '-'}` }}</template>
@@ -92,6 +92,20 @@
         <el-descriptions-item label="所需字段">
           <el-tag v-for="f in detailRow.fields" :key="f" size="small" style="margin-right:4px">{{ f }}</el-tag>
           <span v-if="!detailRow.fields?.length">-</span>
+        </el-descriptions-item>
+        <el-descriptions-item label="筛选条件">
+          <template v-if="detailRow.filters && Object.keys(detailRow.filters).length">
+            <el-tag
+              v-for="(val, key) in detailRow.filters"
+              :key="key"
+              size="small"
+              type="info"
+              style="margin: 0 4px 4px 0"
+            >
+              {{ key }}: {{ formatFilterValue(val) }}
+            </el-tag>
+          </template>
+          <span v-else>-</span>
         </el-descriptions-item>
         <el-descriptions-item label="时间范围">
           {{ detailRow.time_range?.[0] || '不限' }} ~ {{ detailRow.time_range?.[1] || '不限' }}
@@ -217,6 +231,16 @@ function openDetail(row: DataApply) {
   detailVisible.value = true
 }
 
+// 筛选条件展示：[a, b] 视为区间，多选数组用逗号连接
+function formatFilterValue(val: any): string {
+  if (Array.isArray(val)) {
+    return val.length === 2 && val[0] !== null && val[1] !== null
+      ? `${val[0]} ~ ${val[1]}`
+      : val.map((v) => String(v)).join(', ')
+  }
+  return String(val)
+}
+
 // ---- 分配数据（进入筛选生成页并携带申请上下文） ----
 function goFilter(row: DataApply) {
   router.push({ path: '/admin/data-filter', query: { applyId: row.id, userId: row.target_user_id } })
@@ -308,6 +332,8 @@ const statusDot = (s: string) =>
   ({ pending: 'pending', processing: 'running', generating: 'running', completed: 'done', failed: 'reject', rejected: 'reject' } as Record<string, string>)[s] || 'pending'
 const statusText = (s: string) =>
   ({ pending: '待审核', processing: '处理中', generating: '生成中', completed: '已完成', failed: '生成失败', rejected: '已驳回' } as Record<string, string>)[s] || s
+const statusType = (s: string): 'primary' | 'success' | 'info' | 'warning' | 'danger' =>
+  ({ pending: 'warning', processing: 'primary', generating: 'primary', completed: 'success', failed: 'danger', rejected: 'danger' } as Record<string, 'primary' | 'success' | 'info' | 'warning' | 'danger'>)[s] || 'info'
 const priorityTag = (p: string) =>
   ({ low: 'tag-expired', medium: 'tag-pending', high: 'tag-reject' } as Record<string, string>)[p] || 'tag-expired'
 const priorityText = (p: string) => ({ low: '低', medium: '中', high: '高' } as Record<string, string>)[p] || p

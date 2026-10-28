@@ -19,6 +19,7 @@ export function submitApply(payload: {
   fields: string[]
   time_range?: [string, string]
   priority: 'low' | 'medium' | 'high'
+  filters?: Record<string, any>
 }) {
   return request.post<unknown, DataApply>('/user/data-applies', payload)
 }

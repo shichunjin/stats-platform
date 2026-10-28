@@ -70,6 +70,7 @@ export interface DataApply {
   data_name: string
   purpose: string
   fields: string[]
+  filters?: Record<string, any>
   time_range?: [string, string]
   priority: 'low' | 'medium' | 'high'
   status: ApplyStatus
