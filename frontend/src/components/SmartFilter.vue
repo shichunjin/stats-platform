@@ -11,8 +11,8 @@
           style="width: 260px"
         />
         <span class="toolbar-tip">
-          {{ focusSet.size
-            ? `已带入申请筛选条件 ${visibleColumns.length} 项，其余条件可展开添加`
+          {{ focusCount
+            ? `已带入申请筛选条件 ${focusCount} 项，${expanded ? '已展开全部条件' : '其余条件可展开添加'}`
             : `共 ${columns.length} 个条件，默认展示前 ${VISIBLE_LIMIT} 个` }}
         </span>
       </div>
@@ -104,9 +104,9 @@
       </el-row>
 
       <!-- 更多筛选条件：显眼的大号展开/收起按钮 -->
-      <div v-if="moreColumns.length" class="more-toggle-wrap">
+      <div v-if="extraCount" class="more-toggle-wrap">
         <el-button type="primary" plain size="large" class="more-toggle" @click="toggleMore">
-          {{ expanded ? '收起更多筛选条件' : `展开更多筛选条件（${moreColumns.length}）` }}
+          {{ expanded ? '收起更多筛选条件' : `展开更多筛选条件（${extraCount}）` }}
           <el-icon style="margin-left: 4px">
             <ArrowDown v-if="!expanded" />
             <ArrowUp v-else />
@@ -232,18 +232,32 @@ const matchedColumns = computed(() => {
 const focusSet = computed(() => new Set(props.focusColumns || []))
 
 // 搜索时在全部命中里取前 20，未搜索时取原始顺序前 20；
-// 聚焦模式（申请带条件）下主区域只显示用户填写的列，其余全部折叠
+// 聚焦模式（申请带条件）下未展开时只显示用户填写的列；展开后主区域展示全部条件
 const visibleColumns = computed(() => {
   if (focusSet.value.size) {
-    return matchedColumns.value.filter((c) => focusSet.value.has(c.name))
+    const presetCols = matchedColumns.value.filter((c) => focusSet.value.has(c.name))
+    if (!expanded.value) return presetCols
+    const restCols = matchedColumns.value.filter((c) => !focusSet.value.has(c.name))
+    return [...presetCols, ...restCols]
   }
   return matchedColumns.value.slice(0, VISIBLE_LIMIT)
 })
+// 聚焦模式下展开即全部展示在主区域，无需单独的「更多」区块
 const moreColumns = computed(() => {
-  if (focusSet.value.size) {
-    return matchedColumns.value.filter((c) => !focusSet.value.has(c.name))
-  }
+  if (focusSet.value.size) return []
   return matchedColumns.value.slice(VISIBLE_LIMIT)
+})
+// 可展开追加的条件数量（决定按钮文案与是否显示）
+const extraCount = computed(() => {
+  if (focusSet.value.size) {
+    return matchedColumns.value.filter((c) => !focusSet.value.has(c.name)).length
+  }
+  return Math.max(matchedColumns.value.length - VISIBLE_LIMIT, 0)
+})
+// 预设条件实际命中的数量（用于工具栏提示，不受展开状态影响）
+const focusCount = computed(() => {
+  if (!focusSet.value.size) return 0
+  return matchedColumns.value.filter((c) => focusSet.value.has(c.name)).length
 })
 
 // 回填预设筛选条件（按列控件类型写入对应模型）
