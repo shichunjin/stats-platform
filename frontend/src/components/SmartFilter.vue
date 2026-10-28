@@ -218,8 +218,9 @@ const dateRange = reactive<Record<string, [string, string] | null>>({})
 
 const keyword = ref('')
 const expanded = ref(false)
-// 预设条件只回填一次，避免父组件后续刷新覆盖管理员的编辑
+// 预设条件只回填一次，避免父组件后续刷新覆盖管理员的编辑；切换申请时按签名重新回填
 const presetApplied = ref(false)
+let presetSig = ''
 
 // 按关键词过滤后的列（名称模糊匹配）
 const matchedColumns = computed(() => {
@@ -290,10 +291,27 @@ function applyInitialFilters() {
   emitChange()
 }
 
+function presetSignature(f?: Record<string, any>) {
+  try {
+    return JSON.stringify(f ?? {})
+  } catch {
+    return ''
+  }
+}
+
 watch(
   [() => props.columns, () => props.initialFilters],
-  applyInitialFilters,
-  { immediate: true, deep: true },
+  () => {
+    const sig = presetSignature(props.initialFilters)
+    // 预设条件被替换（如管理员切换到另一条申请）时先清空旧条件，再回填新条件
+    if (sig !== presetSig) {
+      presetSig = sig
+      presetApplied.value = false
+      clearFilters()
+    }
+    applyInitialFilters()
+  },
+  { immediate: true },
 )
 
 function toggleMore() {
@@ -314,13 +332,17 @@ const selectedCount = computed(() =>
   }).length,
 )
 
-function resetAll() {
+function clearFilters() {
   Object.keys(model).forEach((k) => delete model[k])
   Object.keys(rangeMin).forEach((k) => (rangeMin[k] = undefined))
   Object.keys(rangeMax).forEach((k) => (rangeMax[k] = undefined))
   Object.keys(dateRange).forEach((k) => (dateRange[k] = null))
-  keyword.value = ''
   expanded.value = false
+}
+
+function resetAll() {
+  clearFilters()
+  keyword.value = ''
   emitChange()
 }
 

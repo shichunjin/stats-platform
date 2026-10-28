@@ -90,7 +90,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import SmartFilter from '@/components/SmartFilter.vue'
@@ -99,7 +99,8 @@ import { getUsers, getDataApply } from '@/api/admin'
 import type { DataColumn, User } from '@/types'
 
 const route = useRoute()
-const applyId = route.query.applyId as string | undefined
+// 同组件内切换申请（仅 query 变化）不会重新挂载，需按 query 变化重新加载
+const applyId = computed(() => route.query.applyId as string | undefined)
 
 const columns = ref<DataColumn[]>([])
 const colsLoading = ref(false)
@@ -118,6 +119,33 @@ const presetCount = computed(() => presetColumns.value.length)
 
 const filterRef = ref<InstanceType<typeof SmartFilter>>()
 
+// 防止快速切换申请时旧请求覆盖新申请的筛选条件
+let presetSeq = 0
+
+async function loadPreset(id?: string) {
+  const seq = ++presetSeq
+  presetFilters.value = {}
+  if (!id) return
+  try {
+    const apply = await getDataApply(Number(id))
+    if (seq !== presetSeq) return
+    presetFilters.value = apply.filters || {}
+  } catch {
+    /* 拦截器处理 */
+  }
+}
+
+watch(
+  () => route.query,
+  () => {
+    // 切换申请时重置目标用户、文件名与生成结果，避免沿用上一条申请的状态
+    targetUserId.value = Number(route.query.userId) || undefined
+    filename.value = ''
+    lastResult.value = null
+    loadPreset(applyId.value)
+  },
+)
+
 onMounted(async () => {
   colsLoading.value = true
   try {
@@ -133,14 +161,7 @@ onMounted(async () => {
     /* 拦截器处理 */
   }
   // 从「待处理申请」进入时，带入用户提交的筛选条件
-  if (applyId) {
-    try {
-      const apply = await getDataApply(Number(applyId))
-      presetFilters.value = apply.filters || {}
-    } catch {
-      /* 拦截器处理 */
-    }
-  }
+  await loadPreset(applyId.value)
 })
 
 function onFilterChange(f: Record<string, any>) {
@@ -172,7 +193,7 @@ async function generate() {
       filters: filters.value,
       target_user_id: targetUserId.value,
       filename: finalName,
-      apply_id: Number(applyId),
+      apply_id: Number(applyId.value),
     })
     lastResult.value = { filename: res.filename }
     ElMessage.success(res.detail || `已受理，后台生成中：${res.filename}`)
