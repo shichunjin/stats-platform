@@ -4,7 +4,7 @@
  * Python 用 `uvicorn.run(reload=True)`：reload 是开发期行为，生产由 systemd/gunicorn
  * 管。Node 侧同理：开发用 `npm run dev`（tsx watch），生产用 `npm start`（node dist）。
  */
-import { getSettings } from './config/env.js';
+import { getSettings, takeConfigWarnings } from './config/env.js';
 import { buildApp, shutdown } from './server.js';
 
 const DEFAULT_PORT = 8000;
@@ -25,6 +25,9 @@ const start = async (): Promise<void> => {
 
   const app = await buildApp();
   const port = resolvePort();
+
+  // 配置里可恢复的问题（如 DATABASE_URL 带 SQLAlchemy 驱动后缀）已自动改写，这里留痕
+  for (const warning of takeConfigWarnings()) app.log.warn(warning);
 
   const stop = async (signal: NodeJS.Signals): Promise<void> => {
     app.log.info({ signal }, '收到停止信号，开始优雅停机');

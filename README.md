@@ -84,6 +84,9 @@ stats-platform/
 - **Node.js ≥ 22.5**（迁移脚本用内置 `node:sqlite`，低版本没有）
 - PostgreSQL（**不支持 SQLite**：`DATABASE_URL` 必须是 `postgres://` 或 `postgresql://`，
   配置层会在启动时直接报错，不做静默回退）
+- 若沿用 Python 时代的 `postgresql+psycopg2://`（SQLAlchemy 驱动后缀），TS 侧会**自动剥离**
+  并在启动日志里打一条 WARN 提示——不会阻断启动，但建议把 `.env` 改成不带后缀的写法
+  （SQLAlchemy 未指定驱动时默认就是 psycopg2，两种实现都认）
 
 ### 安装与运行
 

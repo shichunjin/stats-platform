@@ -67,6 +67,43 @@ const numberFromEnv = (fallback: number) =>
 const intFromEnv = (fallback: number) =>
   z.preprocess(coerceNumber, z.number().int().nonnegative().default(fallback));
 
+/* ---------------- DATABASE_URL 方言规整 ---------------- */
+
+/**
+ * SQLAlchemy 的驱动后缀：`postgresql+psycopg2://`、`postgres+asyncpg://` …
+ * `pg` 驱动不认这种写法，但该后缀只用于指定 DBAPI、语义唯一，剥离后连接语义不变。
+ *
+ * 同一个 `.env` 要同时服务 Python 与 TS 两套实现，直接报 fatal 会让部署卡死，
+ * 因此这里做**自动剥离 + 留痕告警**：既不停服，也不静默改写。
+ */
+const SQLALCHEMY_DRIVER_SUFFIX = /^(postgres(ql)?)\+[^:/@]+(?=:\/\/)/i;
+
+const stripSqlAlchemyDriver = (value: string): string =>
+  value.replace(SQLALCHEMY_DRIVER_SUFFIX, '$1');
+
+/** 打码：告警里绝不能出现数据库密码 */
+const maskUrl = (url: string): string => {
+  try {
+    const parsed = new URL(url);
+    if (parsed.password !== '') parsed.password = '***';
+    return parsed.toString();
+  } catch {
+    return '<无法解析的连接串>';
+  }
+};
+
+/**
+ * 可恢复的配置问题（已自动改写），由 `takeConfigWarnings()` 取走后清空。
+ * 与 ConfigError 的区别：这类问题不阻断启动，但必须留痕 —— 静默改写配置比报错更难排查。
+ */
+let pendingWarnings: string[] = [];
+
+export const takeConfigWarnings = (): readonly string[] => {
+  const taken = pendingWarnings;
+  pendingWarnings = [];
+  return taken;
+};
+
 /* ---------------- Schema：唯一真源，类型由此派生 ---------------- */
 
 export const settingsSchema = z.object({
@@ -76,12 +113,23 @@ export const settingsSchema = z.object({
   /**
    * 只接受 `postgres://` / `postgresql://`（`pglite://` 仅供测试替身）。
    *
-   * 分三种情况给出不同提示，避免「我明明配了 PostgreSQL 却还是报错」：
-   *  - sqlite://       → TS 侧整体不支持
-   *  - postgres+xxx:// → SQLAlchemy 的驱动后缀，pg 驱动不认，去掉即可
-   *  - 其他            → 方言不对
+   * SQLAlchemy 的 `postgresql+psycopg2://` 会被自动剥离驱动后缀并记一条告警；
+   * 其余不合法形态按类型给出可操作提示，避免「我明明配了 PostgreSQL 却还是报错」：
+   *  - sqlite:// → TS 侧整体不支持，指向 db:migrate-sqlite
+   *  - 其他      → 方言不对，给出正确格式
    */
-  databaseUrl: z.string().min(1).superRefine((value, ctx) => {
+  databaseUrl: z.string().min(1)
+    .transform((value) => {
+      const stripped = stripSqlAlchemyDriver(value);
+      if (stripped !== value) {
+        pendingWarnings.push(
+          `DATABASE_URL 含 SQLAlchemy 驱动后缀，已自动按 ${maskUrl(stripped)} 处理；`
+          + '建议把 .env 改成不带 +driver 的写法（SQLAlchemy 与 pg 两种实现都认）',
+        );
+      }
+      return stripped;
+    })
+    .superRefine((value, ctx) => {
     const add = (message: string): void => {
       ctx.addIssue({ code: z.ZodIssueCode.custom, message });
     };
@@ -89,11 +137,6 @@ export const settingsSchema = z.object({
     if (/^sqlite/i.test(value)) {
       add('TS 侧不再支持 SQLite。请改用 PostgreSQL；旧库数据可用 '
         + 'npm run db:migrate-sqlite 迁入');
-      return;
-    }
-    if (/^postgres(ql)?\+/i.test(value)) {
-      add('请去掉 SQLAlchemy 的驱动后缀（如 +psycopg2）。TS 侧直接用 pg 驱动，'
-        + '形如 postgres://user:pwd@host:5432/dbname');
       return;
     }
     if (!/^(postgres(ql)?|pglite):\/\//i.test(value)) {
@@ -203,6 +246,8 @@ export const loadDotenv = (path: string = DEFAULT_DOTENV_PATH): void => {
 };
 
 export const createSettings = (source: EnvSource = process.env): Settings => {
+  // 每次解析都重来：告警归属于这一次解析，避免跨调用串味（测试里会反复解析）
+  pendingWarnings = [];
   const result = settingsSchema.safeParse(normalizeEnv(source));
   if (!result.success) throw new ConfigError(fromZodIssues(result.error.issues));
   return result.data;
