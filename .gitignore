@@ -51,6 +51,14 @@ Thumbs.db
 # Guacamole（db-data 为运行时 PostgreSQL 数据目录，不入库）
 guacamole/db-data/
 
+# Node / TypeScript（后端迁移产物）
+node_modules/
+*.tsbuildinfo
+# dist/ 已在上方全局忽略；这里只补 TS 侧的可选缓存目录
+.vitest-cache/
+# npm 缓存目录（本地安装时由 npm_config_cache 生成，不入库）
+.npm-cache/
+
 # 前端
 frontend/node_modules/
 frontend/*.local
