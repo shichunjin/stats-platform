@@ -16,7 +16,7 @@
 | 层级 | 技术 |
 |------|------|
 | 前端门户 | Web（登录 / 软件列表 / 我的结果 / 审计日志） |
-| 后端 API | Python FastAPI |
+| 后端 API | Python FastAPI（现役）／ TypeScript Fastify（`src/`，已迁移完成） |
 | 远程桌面 | Windows Server 2022 + RDS + Apache Guacamole |
 | 数据库 | PostgreSQL |
 | 桌面软件 | 不限具体软件；清单由 Windows 端 `software-registry.json` 维护 |
@@ -50,9 +50,103 @@ stats-platform/
 │   ├── software-registry.json  # 桌面软件注册表（桌面快捷方式清单，运维手工维护并部署）
 │   ├── enforce-output-location.ps1 # 机器级落点强制（通用对话框位置栏，新装软件后重跑）
 │   └── configure-rds.ps1       # RDS 安全配置（禁用剪贴板/驱动器/打印）
-├── schema.sql                  # PostgreSQL 数据库 DDL
+├── src/                        # TypeScript 实现（Fastify + Drizzle，与 app/ 路由一一对应）
+├── scripts/                    # TS 运维脚本（建表 / 分析宽表 / SQLite→PG 迁移）
+├── tests/ts/                   # Vitest 测试（对应 tests/*.py）
+├── drizzle/                    # Drizzle 版本化迁移 SQL
+├── package.json                # npm 依赖与脚本
+├── tsconfig.json               # src/ 编译配置（tsconfig.test.json 覆盖 tests/）
+├── vitest.config.ts            # 测试配置（PGlite 真实 PostgreSQL）
+├── schema.sql                  # PostgreSQL 数据库 DDL（历史参考，勿执行）
 └── requirements.txt            # Python 依赖
 ```
+
+## TypeScript 实现（src/）
+
+`app/`（Python）已 1:1 迁移到 `src/`（TypeScript）。两者路由完全一致（32 个端点，双向零差异），
+行为差异已在迁移中逐条对齐并写进注释。**Python 版仍是现役部署，TS 版为接替实现。**
+
+### 生态映射
+
+| Python | TypeScript |
+|--------|-----------|
+| FastAPI | Fastify |
+| pydantic v2 / pydantic-settings | zod + dotenv |
+| SQLAlchemy 2.0 | Drizzle ORM（pg-core） |
+| psycopg2 | pg（连接池） |
+| PyJWT | jsonwebtoken |
+| openpyxl | exceljs |
+| paramiko | ssh2 |
+| pytest + httpx | vitest + Fastify `app.inject()` |
+
+### 环境要求
+
+- **Node.js ≥ 22.5**（迁移脚本用内置 `node:sqlite`，低版本没有）
+- PostgreSQL（**不支持 SQLite**：`DATABASE_URL` 必须是 `postgres://` 或 `postgresql://`，
+  配置层会在启动时直接报错，不做静默回退）
+
+### 安装与运行
+
+```bash
+npm install
+
+# 开发（热重载）
+npm run dev
+
+# 构建 + 生产启动
+npm run build
+npm start
+
+# 命令行工具（对应 python -m app.cli）
+npm run cli -- <子命令>
+```
+
+### 质量门禁
+
+```bash
+npm run typecheck   # src/ + tests/ 两份 tsconfig 全量类型检查
+npm run lint        # ESLint（Airbnb TypeScript 风格）
+npm test            # Vitest 全量（PGlite 起真实 PostgreSQL，无需外部数据库）
+```
+
+当前状态：**333 个用例全绿，typecheck 与 lint 零告警。**
+
+### 数据库
+
+```bash
+npm run db:generate   # 改完 src/db/schema.ts 后生成迁移 SQL
+npm run db:migrate    # 应用迁移（生产/日常均走这条，不用 db:push）
+npm run db:studio     # Drizzle Studio 可视化查看
+npm run db:testdata   # 从 CSV 重建分析宽表（--csv <路径> --table test_data --drop）
+```
+
+> 不要用 `db:push` 改生产库，它绕过版本化迁移。
+
+### 从 SQLite 旧库迁到 PostgreSQL
+
+```bash
+# 先干跑，只看行数不写库
+npm run db:migrate-sqlite -- --sqlite ./stats_platform.db --pg-url "postgres://..." --dry-run
+
+# 确认无误后真实导入（--force 会先按外键倒序清空目标表）
+npm run db:migrate-sqlite -- --sqlite ./stats_platform.db --pg-url "postgres://..." --force
+```
+
+说明：
+
+- 只迁 ORM 内的 8 张业务表；`dataset_meta` / `dataset_rows` 是已被宽表方案取代的死代码表，不迁。
+- 分析宽表 `test_data` 不在 ORM 内，迁移后用 `npm run db:testdata` 从 CSV 重建。
+- 旧库多出来的列（如 `users.dept_id`、`sessions.software`）会被自动跳过并打印告警，不会整表失败。
+- 导入后会把各表 `id` 序列对齐到当前最大值，避免后续插入主键冲突。
+- 可重复执行：`--force` 是幂等的。
+
+### 与 Python 版的运维差异
+
+1. **配置在模块加载期校验**：`DATABASE_URL` 写错会直接启动失败，不像 Python 那样等到首次请求才炸。
+2. **响应字段必须在 schema 里声明**：Fastify 的序列化器会丢弃未声明字段（pydantic 不会），
+   新增响应字段时记得同步 `src/schemas/`。
+3. **连接池要显式关闭**：一次性脚本结束前需调用 `closeDatabase()`，否则进程不退出。
+4. **单进程事件循环**：没有 GIL 与多线程，CPU 密集任务不要放在请求路径上。
 
 ## API 端点
 
