@@ -8,8 +8,8 @@
  *  4. .env 严格性   : 复刻 pydantic-settings 的 extra=forbid（见 assertKnownDotenvKeys）
  */
 import { readFileSync } from 'node:fs';
-import dotenv from 'dotenv';
 import { z, type ZodIssue } from 'zod';
+import { applyDotenv, parseDotenv, readDotenvFile } from './dotenv.js';
 
 type EnvSource = Record<string, string | undefined>;
 
@@ -104,6 +104,32 @@ export const takeConfigWarnings = (): readonly string[] => {
   return taken;
 };
 
+/* ---------------- GUACAMOLE_URL 规整 ---------------- */
+
+/**
+ * Guacamole 客户端的路由片段。无论 webapp 挂在 /guacamole 还是 ROOT，
+ * 打开某条连接的地址恒为 `<webapp>/#/client/<connectionId>`。
+ *
+ * 缺了这段 `#` 的后果很隐蔽：浏览器会把 `/3` 当真实路径发给 Tomcat（404），
+ * 而不是交给 Guacamole 前端路由。历史上踩过两次：
+ *  1. .env 里漏写 `/#/client/`；
+ *  2. npm dotenv 把未加引号值里的 `#` 当注释截断（已由 ./dotenv.ts 修正）。
+ * 这里再兜一层：缺失时自动补全并留告警，不让「远程桌面打不开」退化成 404。
+ */
+const GUAC_CLIENT_ROUTE = '#/client/';
+
+const normalizeGuacamoleUrl = (raw: string): string => {
+  if (raw === '' || raw.includes('#')) return raw;
+
+  const base = raw.endsWith('/') ? raw : `${raw}/`;
+  pendingWarnings.push(
+    `GUACAMOLE_URL 缺少 Guacamole 客户端路由片段 ${GUAC_CLIENT_ROUTE}，`
+    + `已自动按 ${base}${GUAC_CLIENT_ROUTE} 处理；请把 .env 改成该值`
+    + '（注意 `/#/client/` 是 URL 的一部分，不是注释）',
+  );
+  return `${base}${GUAC_CLIENT_ROUTE}`;
+};
+
 /* ---------------- Schema：唯一真源，类型由此派生 ---------------- */
 
 export const settingsSchema = z.object({
@@ -186,7 +212,8 @@ export const settingsSchema = z.object({
   rdsHost: z.string().default(''),
   rdsPort: intFromEnv(3389),
 
-  guacamoleUrl: z.string().default('https://guac.example.com/guacamole/#/client/'),
+  guacamoleUrl: z.string().default('https://guac.example.com/guacamole/#/client/')
+    .transform(normalizeGuacamoleUrl),
   /** A4 已废弃：仅为兼容旧 .env 保留，不再被读取 */
   guacamoleConnectionId: z.string().default('1'),
   guacDbUrl: z.string().default(''),
@@ -242,7 +269,7 @@ const fromZodIssues = (zodIssues: ZodIssue[]): ConfigIssue[] =>
 export const DEFAULT_DOTENV_PATH = '.env';
 
 export const loadDotenv = (path: string = DEFAULT_DOTENV_PATH): void => {
-  dotenv.config({ path, encoding: 'utf8' });
+  applyDotenv(readDotenvFile(path));
 };
 
 export const createSettings = (source: EnvSource = process.env): Settings => {
@@ -263,7 +290,7 @@ export const createSettings = (source: EnvSource = process.env): Settings => {
  */
 export const assertKnownDotenvKeys = (path: string = DEFAULT_DOTENV_PATH): void => {
   const allowed = new Set(Object.keys(settingsSchema.shape).map(toUpperSnake));
-  const unknown = Object.keys(dotenv.parse(readFileSync(path, 'utf8')))
+  const unknown = Object.keys(parseDotenv(readFileSync(path, 'utf8')))
     .map((key) => key.trim().toUpperCase())
     .filter((key) => !allowed.has(key));
 

@@ -64,6 +64,37 @@ describe('DATABASE_URL 方言校验', () => {
   });
 });
 
+describe('GUACAMOLE_URL 客户端路由片段', () => {
+  const PG = 'postgresql://u:p@h:5432/db';
+
+  beforeEach(() => {
+    takeConfigWarnings();
+  });
+
+  it('带 /#/client/ 的 URL 原样通过，无告警', () => {
+    const { guacamoleUrl } = createSettings({
+      ...BASE, DATABASE_URL: PG, GUACAMOLE_URL: 'https://guac.x/guacamole/#/client/',
+    });
+    expect(guacamoleUrl).toBe('https://guac.x/guacamole/#/client/');
+    expect(takeConfigWarnings()).toEqual([]);
+  });
+
+  it('缺少 # 时自动补全（否则 /session/connect 会拼出 /guacamole/3 → Tomcat 404）', () => {
+    const { guacamoleUrl } = createSettings({
+      ...BASE, DATABASE_URL: PG, GUACAMOLE_URL: 'https://guac.x/guacamole/',
+    });
+    expect(guacamoleUrl).toBe('https://guac.x/guacamole/#/client/');
+    expect(takeConfigWarnings()[0]).toContain('#/client/');
+  });
+
+  it('ROOT 部署（无 /guacamole 前缀）同样补全', () => {
+    const { guacamoleUrl } = createSettings({
+      ...BASE, DATABASE_URL: PG, GUACAMOLE_URL: 'https://guac.x',
+    });
+    expect(guacamoleUrl).toBe('https://guac.x/#/client/');
+  });
+});
+
 describe('ConfigError', () => {
   beforeEach(() => {
     takeConfigWarnings();

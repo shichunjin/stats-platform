@@ -150,6 +150,13 @@ npm run db:migrate-sqlite -- --sqlite ./stats_platform.db --pg-url "postgres://.
    新增响应字段时记得同步 `src/schemas/`。
 3. **连接池要显式关闭**：一次性脚本结束前需调用 `closeDatabase()`，否则进程不退出。
 4. **单进程事件循环**：没有 GIL 与多线程，CPU 密集任务不要放在请求路径上。
+5. **`.env` 由自带解析器读取**（`src/config/dotenv.ts`），不用 npm `dotenv`：
+   后者把未加引号值里的 `#` 当注释截断，`GUACAMOLE_URL=https://host/guacamole/#/client/`
+   会被截成 `https://host/guacamole/`，`/session/connect` 拼出 `/guacamole/3` → Tomcat 404。
+   python-dotenv 只在 `#` 前有空白时才当注释，这里已对齐它的语义；
+   配置层另有一道兜底：GUACAMOLE_URL 缺 `#/client/` 时自动补全并打 WARN。
+   注意 `drizzle.config.ts` 仍用 npm `dotenv`（drizzle-kit 不做 `.js`→`.ts` 后缀映射），
+   故 `DATABASE_URL` 密码若含 `#` 请先 URL 编码成 `%23`。
 
 ## API 端点
 
