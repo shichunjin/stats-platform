@@ -73,7 +73,33 @@ export const settingsSchema = z.object({
   /** prod（默认）| dev。dev 开放 /docs 并追加 localhost CORS 白名单 */
   appEnv: z.enum(['prod', 'dev']).default('prod'),
 
-  databaseUrl: z.string().min(1).regex(/^(postgres(ql)?|pglite):\/\//i, 'TS 侧仅支持 PostgreSQL'),
+  /**
+   * 只接受 `postgres://` / `postgresql://`（`pglite://` 仅供测试替身）。
+   *
+   * 分三种情况给出不同提示，避免「我明明配了 PostgreSQL 却还是报错」：
+   *  - sqlite://       → TS 侧整体不支持
+   *  - postgres+xxx:// → SQLAlchemy 的驱动后缀，pg 驱动不认，去掉即可
+   *  - 其他            → 方言不对
+   */
+  databaseUrl: z.string().min(1).superRefine((value, ctx) => {
+    const add = (message: string): void => {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message });
+    };
+
+    if (/^sqlite/i.test(value)) {
+      add('TS 侧不再支持 SQLite。请改用 PostgreSQL；旧库数据可用 '
+        + 'npm run db:migrate-sqlite 迁入');
+      return;
+    }
+    if (/^postgres(ql)?\+/i.test(value)) {
+      add('请去掉 SQLAlchemy 的驱动后缀（如 +psycopg2）。TS 侧直接用 pg 驱动，'
+        + '形如 postgres://user:pwd@host:5432/dbname');
+      return;
+    }
+    if (!/^(postgres(ql)?|pglite):\/\//i.test(value)) {
+      add('TS 侧仅支持 PostgreSQL，形如 postgres://user:pwd@host:5432/dbname');
+    }
+  }),
 
   jwtSecret: z.string().min(1),
   jwtAlgorithm: z.string().default('HS256'),
