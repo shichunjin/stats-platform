@@ -7,7 +7,10 @@ import type { FastifyPluginAsync } from 'fastify';
 import { z } from 'zod';
 import { HttpError, authenticate, requireAdmin } from '../auth/guards.js';
 import { recordAudit } from '../audit.js';
-import { dataApplies, messages, users, type DataApply, type User } from '../db/schema.js';
+import {
+  dataApplies, messages, users,
+  type ApplyPriority, type DataApply, type User,
+} from '../db/schema.js';
 import { getClientIp } from '../security/rate-limit.js';
 import {
   dataApplyCreateSchema, dataApplyRejectRequestSchema, dataApplyOutSchema, toDataApplyOut,
@@ -39,13 +42,23 @@ const parseNaiveDateTime = (value: string | null | undefined): Date | null => {
   if (!match) throw new HttpError(422, `时间格式无法解析: ${value}`);
 
   const [, y, mo, d, h, mi, s = '0', ms = '0'] = match;
-  return new Date(
+  // 必须用 Date.UTC：new Date(y, mo, ...) 会按**服务器本地时区**解释这组墙上时间，
+  // 于是 TZ=+08:00 的机器上 "2026-01-01T00:00:00" 会存成 2025-12-31T16:00Z，
+  // 与 Python 的 naive 语义（原样保留 00:00:00）差 8 小时，且随部署环境漂移。
+  return new Date(Date.UTC(
     Number(y), Number(mo) - 1, Number(d),
     Number(h), Number(mi), Number(s), Number(ms.slice(0, 3).padEnd(3, '0')),
-  );
+  ));
 };
 
-const VALID_PRIORITIES = new Set(['low', 'medium', 'high']);
+const VALID_PRIORITIES = new Set<string>(['low', 'medium', 'high']);
+
+/**
+ * 入向 schema 刻意不枚举 priority（对齐 Python 的裸 str），非法值在这里回落 'medium'。
+ * 收窄成 ApplyPriority 交给类型系统兜底，避免把任意字符串写进枚举列。
+ */
+const toPriority = (value: string): ApplyPriority =>
+  (VALID_PRIORITIES.has(value) ? value as ApplyPriority : 'medium');
 
 /** 状态机：pending → processing → generating → completed / failed；rejected 为终态 */
 const APPLY_STATUSES = [
@@ -89,7 +102,7 @@ export const appliesRoutes: FastifyPluginAsync = async (app) => {
         filters,
         timeStart: parseNaiveDateTime(timeRange?.[0] ?? undefined),
         timeEnd: parseNaiveDateTime(timeRange?.[1] ?? undefined),
-        priority: VALID_PRIORITIES.has(priority) ? priority : 'medium',
+        priority: toPriority(priority),
         status: 'pending',
       }).returning();
 

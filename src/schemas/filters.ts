@@ -45,5 +45,16 @@ export const filterMapSchema = z
     }
   });
 
+/**
+ * 出向（响应）用的 filters schema：刻意放宽为「任意 JSON 对象」。
+ *
+ * 背景：Python 侧 filters 是裸 `dict`，存量库里可能存在布尔、任意长度数组、嵌套对象等
+ * **入向校验不接受**的值。而 Fastify 的序列化器遇到不匹配 schema 的值是**运行时抛 TypeError**
+ * （不是忽略字段），结果是整个端点 500（线上真实出现过：GET /user/data-applies）。
+ *
+ * 因此出向 schema 绝不能比库里的存量数据更严：入向严格校验，出向原样透传。
+ */
+export const filterMapOutSchema = z.record(z.string(), z.unknown());
+
 export type FilterValue = z.infer<typeof filterValueSchema>;
 export type FilterMap = z.infer<typeof filterMapSchema>;

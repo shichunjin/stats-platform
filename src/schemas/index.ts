@@ -16,7 +16,7 @@ import { z } from 'zod';
 import type {
   AuditLog, DataApply, ExportResult, Message, PendingFile, RemoteSession, User,
 } from '../db/schema.js';
-import { filterMapSchema } from './filters.js';
+import { filterMapOutSchema, filterMapSchema } from './filters.js';
 
 extendZodWithOpenApi(z);
 
@@ -29,10 +29,22 @@ const isoDateTimeSchema = z
   .datetime({ offset: true })
   .openapi({ description: 'ISO 8601 时间字符串', example: '2026-11-01T06:48:00.000Z' });
 
-/** [起始时间, 结束时间]，两端都可为 null */
+/** [起始时间, 结束时间]，两端都可为 null。仅用于**入向**校验 */
 export const timeRangeSchema = z
   .tuple([isoDateTimeSchema.nullable(), isoDateTimeSchema.nullable()])
   .openapi({ description: '[起始时间, 结束时间] ISO 字符串' });
+
+/**
+ * 出向的 time_range：用 `array` 而不是 `tuple`。
+ *
+ * fast-json-stringify 的元组分支要求 `items[i]` 有**顶层 type**（见其 buildArrayTypeCondition），
+ * 而带 `format: date-time` 的 nullable 字符串会被 zod-to-json-schema 展开成
+ * `anyOf`（没有顶层 type），结果是「只要申请填了时间范围，序列化就必抛
+ * Item at 0 does not match schema definition」。改成 array 后走的是逐元素 buildValue，正常。
+ */
+export const timeRangeOutSchema = z
+  .array(isoDateTimeSchema.nullable())
+  .openapi({ description: '[起始时间, 结束时间] ISO 字符串，两端可为 null' });
 
 const ROLE_DESCRIPTION = '角色：user=普通用户 / admin=管理员 / superadmin=超级管理员';
 
@@ -165,7 +177,12 @@ export const dataApplyCreateSchema = z.object({
   purpose: z.string().min(1).openapi({ description: '数据用途' }),
   fields: z.array(z.string().min(1).max(128)).max(200).default([]).openapi({ description: '所需字段' }),
   time_range: timeRangeSchema.nullish(),
-  priority: z.enum(['low', 'medium', 'high']).default('medium').openapi({ description: '优先级：low/medium/high' }),
+  /**
+   * 刻意**不**用 z.enum：Python 侧是裸 `str`，非法值在路由里回落 'medium' 而不是 422。
+   * 改成枚举会让既有客户端（比如传空串）从「能用」变成 422，属于破坏性收紧。
+   */
+  priority: z.string().default('medium')
+    .openapi({ description: '优先级：low/medium/high（其他值回落 medium）' }),
   filters: filterMapSchema.default({}).openapi({ description: '筛选条件：列名 -> 值/[min,max]/模糊文本' }),
 }).strict();
 
@@ -174,8 +191,9 @@ export const dataApplyOutSchema = z.object({
   data_name: z.string(),
   purpose: z.string(),
   fields: z.array(z.string()).default([]),
-  filters: filterMapSchema.default({}),
-  time_range: timeRangeSchema.nullable(),
+  // 出向用宽 schema：库里可能存着 Python 时代写入的任意 JSON，序列化器不匹配会抛 500
+  filters: filterMapOutSchema.default({}),
+  time_range: timeRangeOutSchema.nullable(),
   priority: z.string(),
   status: z.string(),
   reject_reason: z.string().nullable(),
@@ -205,13 +223,21 @@ export const filteredDataGenerateRequestSchema = z.object({
     .openapi({ description: '关联的数据申请 ID（可选，生成后自动置为完成）' }),
 }).strict();
 
+/**
+ * ⚠️ type / control 刻意保持 `z.string()`（对齐 Python 的裸 str）。
+ *
+ * dataset.ts 实际会产出 `type='date'` / `control='daterange'`（日期列），
+ * 而 Fastify 序列化器对不匹配 schema 的值是**运行时抛 TypeError**——写成枚举
+ * 会让「表里存在日期列」直接变成 /data/columns 全量 500。
+ */
 export const dataColumnOutSchema = z.object({
   name: z.string().openapi({ description: '列名' }),
-  type: z.enum(['int', 'float', 'text']).openapi({ description: '数据类型：int/float/text' }),
-  control: z.enum(['select', 'range', 'input']).openapi({ description: '筛选控件：select/range/input' }),
+  type: z.string().openapi({ description: '数据类型：int/float/text/date' }),
+  control: z.string().openapi({ description: '筛选控件：select/range/input/daterange' }),
   options: z.array(z.unknown()).nullish().openapi({ description: '枚举值（control=select 时）' }),
-  min: z.number().nullish().openapi({ description: '最小值（control=range 时）' }),
-  max: z.number().nullish().openapi({ description: '最大值（control=range 时）' }),
+  // 日期列的 min/max 是 'YYYY-MM-DD' 字符串，不是数字，所以这里也不能收窄成 number
+  min: z.unknown().nullish().openapi({ description: '最小值（数字或日期字符串）' }),
+  max: z.unknown().nullish().openapi({ description: '最大值（数字或日期字符串）' }),
 });
 
 /* ================================================================
