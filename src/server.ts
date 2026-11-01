@@ -12,7 +12,7 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { join, resolve } from 'node:path';
-import Fastify, { type FastifyInstance } from 'fastify';
+import Fastify, { type FastifyInstance, type FastifyReply } from 'fastify';
 import cors from '@fastify/cors';
 import fastifyStatic from '@fastify/static';
 import fastifySwagger from '@fastify/swagger';
@@ -31,11 +31,28 @@ import { resultsRoutes } from './routers/results.js';
 import { sessionRoutes } from './routers/session.js';
 
 /**
- * src/server.ts → 仓库根目录。
- * 注意只用一个 `..`：URL 解析会先去掉文件名（server.ts），再逐个 `..` 弹出目录，
- * 所以 `'..'` 才是 src 的父目录（写 '../..' 会多弹一级到仓库的父目录）。
+ * 定位仓库根目录。
+ *
+ * 开发与构建两种运行态的层级不一样，写死 `..` 只能在其中一种下正确：
+ *   - `tsx src/index.ts`        → src/server.ts，上 1 级即根
+ *   - `node dist/src/server.js` → dist/src/server.js，上 2 级才是根
+ * （曾因写死 `..` 导致构建态解析出 dist/app/static/login.html，/login 全量 500）
+ *
+ * 因此改为从本文件所在目录逐级向上找 package.json，两种布局都能命中。
  */
-const REPO_ROOT = resolve(fileURLToPath(new URL('..', import.meta.url)));
+export const findRepoRoot = (startDir: string): string => {
+  let dir = startDir;
+  // 最多向上 6 级：正常 1-2 级就能命中，限制深度是为了目录异常时快速失败而不是死循环
+  for (let depth = 0; depth < 6; depth += 1) {
+    if (existsSync(join(dir, 'package.json'))) return dir;
+    const parent = resolve(dir, '..');
+    if (parent === dir) break;
+    dir = parent;
+  }
+  return startDir;
+};
+
+const REPO_ROOT = findRepoRoot(resolve(fileURLToPath(new URL('.', import.meta.url))));
 const FRONTEND_DIST = join(REPO_ROOT, 'frontend', 'dist');
 const SPA_INDEX = join(FRONTEND_DIST, 'index.html');
 /** 旧版静态页面（未构建 Vue 产物时的兜底），沿用 Python 的位置 app/static */
@@ -68,7 +85,21 @@ const DEV_CORS_ORIGINS: readonly string[] = [
   'http://127.0.0.1:5173',
 ];
 
-const html = (filePath: string): string => readFileSync(filePath, 'utf8');
+/**
+ * 旧版静态页面（app/static/*.html）。
+ * 缺文件时返回 503 + 明确文案，而不是让 readFileSync 抛 ENOENT —— 后者在日志里
+ * 只是一串堆栈，看不出到底是前端没构建还是路径算错了。
+ */
+const sendLegacyPage = (reply: FastifyReply, name: string): FastifyReply => {
+  const filePath = join(LEGACY_STATIC_DIR, name);
+  if (!existsSync(filePath)) {
+    return reply.code(503).type('text/plain').send(
+      `静态页面缺失：${filePath}。请先构建前端（frontend/dist/index.html），`
+      + '或确认仓库里存在 app/static/',
+    );
+  }
+  return reply.type('text/html').send(readFileSync(filePath, 'utf8'));
+};
 
 export interface BuildOptions {
   /** 测试用：跳过迁移/演示数据，只装配路由 */
@@ -156,6 +187,12 @@ export const buildApp = async (options: BuildOptions = {}): Promise<FastifyInsta
     });
   } else {
     // 未构建前端时的兜底：旧版静态页面 + 根路径服务信息
+    if (!existsSync(LEGACY_STATIC_DIR)) {
+      app.log.warn(
+        { frontendDist: FRONTEND_DIST, legacyStatic: LEGACY_STATIC_DIR },
+        '前端产物与旧版静态页都不存在，/login 与 /dashboard 将返回 503',
+      );
+    }
     await app.register(fastifyStatic, { root: LEGACY_STATIC_DIR, prefix: '/static' });
 
     app.get('/', async () => ({
@@ -175,11 +212,9 @@ export const buildApp = async (options: BuildOptions = {}): Promise<FastifyInsta
       },
     }));
 
-    app.get('/login', async (_request, reply) => reply.type('text/html')
-      .send(html(join(LEGACY_STATIC_DIR, 'login.html'))));
-
-    app.get('/dashboard', async (_request, reply) => reply.type('text/html')
-      .send(html(join(LEGACY_STATIC_DIR, 'dashboard.html'))));
+    // 文件缺失时给 503 + 明确文案，而不是让 readFileSync 抛 ENOENT 变成一堆堆栈的 500
+    app.get('/login', (_request, reply) => sendLegacyPage(reply, 'login.html'));
+    app.get('/dashboard', (_request, reply) => sendLegacyPage(reply, 'dashboard.html'));
   }
 
   if (options.skipBootstrap !== true) {
