@@ -5,6 +5,12 @@
 - 审计方式：静态代码审查 + 配置核对 + 本地启动/测试复现
 - 代码基线：README 中标注的 "安全修复 A1~A4 / B1~B15 / C1~C7" 已落地后的当前主干
 
+> **阅读提示（2026-11-02 补记）**：本次审计的对象是当时的 **Python / FastAPI 实现**（`app/`）。
+> 该实现已 1:1 迁移到 TypeScript / Fastify（`src/`）并于 2026-11-02 移除，Python 代码可从 git 历史取回
+> （`git log --diff-filter=D --name-only -- app/`）。下文所有 `app/*.py` 路径与行号均为**历史定位**，
+> 当前等价位置基本为 `src/` 下同名模块（如 `app/auth.py` → `src/auth/token.ts` + `src/auth/guards.ts`），
+> 报告结论与整改建议本身依然有效。
+
 ---
 
 ## 一、系统概览

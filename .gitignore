@@ -1,15 +1,9 @@
-# Python
-__pycache__/
-*.py[cod]
-*$py.class
-*.so
-.Python
+# 构建产物
 build/
 dist/
-*.egg-info/
-.eggs/
+*.so
 
-# 虚拟环境
+# 虚拟环境（遗留目录，规则保留以免本地 .venv 被误加进暂存区）
 .venv/
 venv/
 env/
@@ -24,9 +18,7 @@ ENV/
 fileserver_data/
 
 # 测试缓存
-.pytest_cache/
-.coverage
-htmlcov/
+coverage/
 
 # IDE
 .vscode/
@@ -51,7 +43,7 @@ Thumbs.db
 # Guacamole（db-data 为运行时 PostgreSQL 数据目录，不入库）
 guacamole/db-data/
 
-# Node / TypeScript（后端迁移产物）
+# Node / TypeScript
 node_modules/
 *.tsbuildinfo
 # dist/ 已在上方全局忽略；这里只补 TS 侧的可选缓存目录
@@ -62,6 +54,6 @@ node_modules/
 # 前端
 frontend/node_modules/
 frontend/*.local
-# dist 构建产物入库（部署机无 Node 环境，git pull 后由 FastAPI 直接托管；需在全局 dist/ 规则之后取反）
+# dist 构建产物入库（部署机 git pull 后由 Node 服务直接托管；需在全局 dist/ 规则之后取反）
 !frontend/dist/
 !frontend/dist/**

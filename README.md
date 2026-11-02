@@ -16,7 +16,7 @@
 | 层级 | 技术 |
 |------|------|
 | 前端门户 | Web（登录 / 软件列表 / 我的结果 / 审计日志） |
-| 后端 API | Python FastAPI（现役）／ TypeScript Fastify（`src/`，已迁移完成） |
+| 后端 API | TypeScript Fastify（`src/`，2026-11 起为唯一实现） |
 | 远程桌面 | Windows Server 2022 + RDS + Apache Guacamole |
 | 数据库 | PostgreSQL |
 | 桌面软件 | 不限具体软件；清单由 Windows 端 `software-registry.json` 维护 |
@@ -25,21 +25,18 @@
 
 ```
 stats-platform/
-├── app/                        # FastAPI 后端
-│   ├── __init__.py
-│   ├── config.py               # 平台配置（数据库、JWT、路径等）
-│   ├── database.py             # SQLAlchemy 连接与会话管理
-│   ├── models.py               # ORM 模型（users/scopes/sessions/...）
-│   ├── schemas.py              # Pydantic 请求/响应 Schema
-│   ├── auth.py                 # JWT 认证与权限校验
-│   ├── review.py               # 结果审查服务（白名单/敏感字段/行数检查）
-│   ├── main.py                 # FastAPI 入口
-│   └── routers/                # 路由模块
-│       ├── __init__.py
-│       ├── auth.py             # POST /auth/login, GET /me
-│       ├── session.py          # POST /session/connect
-│       ├── results.py           # GET /results/mine, POST /results/scan, POST /results/{id}/download
-│       └── admin.py            # GET /admin/audit, GET /admin/pending
+├── src/                        # TypeScript 实现（Fastify + Drizzle + zod）
+│   ├── config/                 # 配置与 .env 解析（fail-fast）
+│   ├── db/                     # Drizzle schema 与会话
+│   ├── routers/                # 路由（auth/session/results/data/applies/messages/admin）
+│   ├── services/               # 业务服务（dataset/jobs/review/platform-config）
+│   ├── integrations/           # 外部系统（Guacamole / SSH / SFTP / Windows 账号）
+│   ├── bootstrap/              # 启动期动作（迁移、演示账号）
+│   ├── plugins/ security/      # Fastify 插件、限流与 IP 策略
+│   └── server.ts               # 应用工厂（静态页、安全头、CORS、Swagger）
+├── legacy-static/              # 旧版静态页（login/dashboard.html），前端未构建时的兜底
+├── scripts/                    # TS 运维脚本（建表 / 分析宽表 / SQLite→PG 迁移）
+├── tests/ts/                   # Vitest 测试
 ├── guacamole/                  # Guacamole 部署配置
 │   ├── docker-compose.yml      # guacd + postgres + guacamole 三容器编排
 │   ├── nginx-guacamole.conf    # Nginx 反向代理 + WebSocket + HTTPS
@@ -50,23 +47,23 @@ stats-platform/
 │   ├── software-registry.json  # 桌面软件注册表（桌面快捷方式清单，运维手工维护并部署）
 │   ├── enforce-output-location.ps1 # 机器级落点强制（通用对话框位置栏，新装软件后重跑）
 │   └── configure-rds.ps1       # RDS 安全配置（禁用剪贴板/驱动器/打印）
-├── src/                        # TypeScript 实现（Fastify + Drizzle，与 app/ 路由一一对应）
-├── scripts/                    # TS 运维脚本（建表 / 分析宽表 / SQLite→PG 迁移）
-├── tests/ts/                   # Vitest 测试（对应 tests/*.py）
 ├── drizzle/                    # Drizzle 版本化迁移 SQL
 ├── package.json                # npm 依赖与脚本
 ├── tsconfig.json               # src/ 编译配置（tsconfig.test.json 覆盖 tests/）
 ├── vitest.config.ts            # 测试配置（PGlite 真实 PostgreSQL）
 ├── schema.sql                  # PostgreSQL 数据库 DDL（历史参考，勿执行）
-└── requirements.txt            # Python 依赖
+└── .env.example                # 环境变量模板（复制为 .env 后填写）
 ```
 
-## TypeScript 实现（src/）
+## 后端实现（src/）
 
-`app/`（Python）已 1:1 迁移到 `src/`（TypeScript）。两者路由完全一致（32 个端点，双向零差异），
-行为差异已在迁移中逐条对齐并写进注释。**Python 版仍是现役部署，TS 版为接替实现。**
+后端为 **TypeScript / Fastify**（`src/`）。原 Python / FastAPI 实现（`app/`、`tests/*.py`、
+`requirements.txt`）已于 **2026-11-02 移除**：迁移前后 32 个端点双向零差异、372 个 Vitest 用例全绿。
 
-### 生态映射
+> 代码注释里出现的 `app/*.py`、`pytest` 等字样是**迁移溯源标注**，指向已删除的 Python 文件，
+> 需要对照实现时到 git 历史里取：`git log --diff-filter=D --name-only -- app/`。
+
+### 生态映射（迁移期对照，保留作演进记录）
 
 | Python | TypeScript |
 |--------|-----------|
@@ -100,7 +97,7 @@ npm run dev
 npm run build
 npm start
 
-# 命令行工具（对应 python -m app.cli）
+# 命令行工具（角色升降级等运维操作）
 npm run cli -- <子命令>
 ```
 
@@ -143,7 +140,7 @@ npm run db:migrate-sqlite -- --sqlite ./stats_platform.db --pg-url "postgres://.
 - 导入后会把各表 `id` 序列对齐到当前最大值，避免后续插入主键冲突。
 - 可重复执行：`--force` 是幂等的。
 
-### 与 Python 版的运维差异
+### 运维要点（原为「与 Python 版的差异」，Python 版已移除，留档备查）
 
 1. **配置在模块加载期校验**：`DATABASE_URL` 写错会直接启动失败，不像 Python 那样等到首次请求才炸。
 2. **响应字段必须在 schema 里声明**：Fastify 的序列化器会丢弃未声明字段（pydantic 不会），
@@ -235,7 +232,7 @@ npm run db:migrate-sqlite -- --sqlite ./stats_platform.db --pg-url "postgres://.
 - **图片/PDF/二进制文件**：无法提取文本、不参与比对，免审核自动发布
 - **基线缺失**：服务器上 `testData.csv` 缺失无法判定时，安全默认转人工审核
 - **编码兼容**：基线与候选文件均支持 UTF-8 / GBK 解码（生产原始数据为 GBK）
-- **旧规则保留**：`review.py` 中原字段白名单 / 敏感正则 / 行列数上限等规则函数仍保留，可供管理员人工审核参考或后续扩展
+- **旧规则保留**：`src/services/review.ts` 中原字段白名单 / 敏感正则 / 行列数上限等规则函数仍保留，可供管理员人工审核参考或后续扩展
 
 阈值与免审发布有效期可通过环境变量 `EXPORT_REVIEW_SIMILARITY_THRESHOLD`（默认 0.6）、`EXPORT_PUBLISH_VALID_DAYS`（默认 30）配置。
 
@@ -251,19 +248,19 @@ npm run db:migrate-sqlite -- --sqlite ./stats_platform.db --pg-url "postgres://.
 sudo -u postgres psql -c "CREATE USER stats WITH PASSWORD 'stats123';"
 sudo -u postgres psql -c "CREATE DATABASE stats_platform OWNER stats;"
 
-# 表结构由 ORM 自动创建：配置好 .env 的 DATABASE_URL 后启动应用即可
-# （schema.sql 为早期手工 DDL，已与 app/models.py 脱节，仅作历史参考，不要再执行）
+# 表结构由 Drizzle 迁移自动创建：配置好 .env 的 DATABASE_URL 后启动应用即可
+# （schema.sql 为早期手工 DDL，已与 src/db/schema.ts 脱节，仅作历史参考，不要再执行）
 
-# 部署 FastAPI
+# 部署后端
 cd stats-platform
-python3 -m venv venv && source venv/bin/activate
-pip install -r requirements.txt
+npm install
 
 # 配置环境变量
 cp .env.example .env  # 修改数据库连接、JWT 密钥等
 
-# 启动
-uvicorn app.main:app --host 0.0.0.0 --port 8000
+# 构建并启动（生产）
+npm run build
+npm start
 ```
 
 ### 2. Windows Server 2022（RDS 会话主机 + 桌面软件）
@@ -531,8 +528,8 @@ sudo systemctl enable --now nginx
 cp .env.example .env
 # 编辑 .env，至少修改 DATABASE_URL 和 JWT_SECRET 两个必填项
 
-# 2. 启动（uvicorn 会自动加载 .env）
-uvicorn app.main:app --host 0.0.0.0 --port 8000
+# 2. 启动（配置层会自动加载 .env）
+npm run build && npm start
 ```
 
 **完整配置项：**
@@ -540,7 +537,7 @@ uvicorn app.main:app --host 0.0.0.0 --port 8000
 | 配置项 | 默认值 | 是否必填 | 说明 |
 |--------|--------|:---:|------|
 | `DATABASE_URL` | 无 | ✅ 必填 | 数据库连接串（含密码） |
-| `JWT_SECRET` | 无 | ✅ 必填 | JWT 签名密钥（建议 `python -c "import secrets; print(secrets.token_hex(32))"` 生成） |
+| `JWT_SECRET` | 无 | ✅ 必填 | JWT 签名密钥（建议 `openssl rand -hex 32` 生成） |
 | `JWT_ALGORITHM` | `HS256` | 否 | JWT 算法 |
 | `JWT_EXPIRE_HOURS` | `8` | 否 | Token 有效期（小时） |
 | `FILESERVER_ROOT` | `\\fileserver` | 否 | 文件服务器根路径 |
@@ -548,7 +545,7 @@ uvicorn app.main:app --host 0.0.0.0 --port 8000
 | `RDS_PORT` | `3389` | 否 | RDP 端口 |
 | `GUACAMOLE_URL` | `https://guac.chunjindevelop68.xyz/guacamole/#/client/` | 否 | Guacamole 前端地址 |
 
-> 环境变量名与 `config.py` 中字段名一一对应（大小写不敏感）。`.env` 已被 `.gitignore` 排除，不会提交到 git。
+> 环境变量名与 `src/config/env.ts` 的 schema 字段一一对应（UPPER_SNAKE ↔ camelCase 自动转换）。`.env` 已被 `.gitignore` 排除，不会提交到 git。
 >
 > 桌面软件清单不在环境变量中配置：统一由 Windows 端登录脚本同目录的 `software-registry.json` 维护（见上文「软件注册表」）。
 

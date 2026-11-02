@@ -3,7 +3,7 @@
  *
  * 曾把 REPO_ROOT 写死成 `new URL('..', import.meta.url)`，只在开发态（`tsx src/index.ts`）
  * 正确；构建态（`node dist/src/server.js`）会算成 `<root>/dist`，进而去读
- * `dist/app/static/login.html`，导致 /login 全量 500。
+ * `dist/legacy-static/login.html`，导致 /login 全量 500。
  */
 import { mkdirSync, mkdtempSync, realpathSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';

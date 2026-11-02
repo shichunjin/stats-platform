@@ -7,7 +7,7 @@
     environment variables, creates desktop shortcuts from the software
     registry (software-registry.json), and optionally launches a registered software.
 
-    目录约定（必须与后端 app/config.py 一致）：
+    目录约定（必须与后端 src/config/env.ts 一致）：
       W:      -> \\127.0.0.1\workspace\<用户名>   (C:\workspace\<用户名>)
       pending -> \\127.0.0.1\pending\<用户名>     (C:\pending\<用户名>)
     私有目录由后端在注册/投递数据时创建并锁定 ACL，本脚本不再在共享根下建目录

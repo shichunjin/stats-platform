@@ -1,12 +1,12 @@
 -- ============================================================
 -- 【已废弃 2026-10】不要再执行本文件
--- 表结构以 app/models.py 为准，应用启动时 SQLAlchemy create_all 自动建表。
+-- 表结构以 src/db/schema.ts（Drizzle）为准，应用启动时自动建表。
 -- 本文档仅作历史参考，且仍包含已于三档角色/数据权限调整中移除的
 -- scopes / user_scope / users.dept_id，与当前 ORM 不一致。
 -- ============================================================
 -- 统计软件托管平台 数据库 DDL (PostgreSQL)
 -- ------------------------------------------------------------
--- 与 app/models.py 当前 ORM 全量对齐（安全修复 B15，2026-10 Phase 2）：
+-- 与 src/db/schema.ts 当前 ORM 全量对齐时的快照（安全修复 B15，2026-10 Phase 2）：
 --   users            + password_hash / password_version
 --   pending_files    + content_sha + 部分唯一索引 ix_pending_files_active
 --   export_results   + expires_at

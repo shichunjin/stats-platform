@@ -36,7 +36,7 @@ import { sessionRoutes } from './routers/session.js';
  * 开发与构建两种运行态的层级不一样，写死 `..` 只能在其中一种下正确：
  *   - `tsx src/index.ts`        → src/server.ts，上 1 级即根
  *   - `node dist/src/server.js` → dist/src/server.js，上 2 级才是根
- * （曾因写死 `..` 导致构建态解析出 dist/app/static/login.html，/login 全量 500）
+ * （曾因写死 `..` 导致构建态解析出 dist/legacy-static/login.html，/login 全量 500）
  *
  * 因此改为从本文件所在目录逐级向上找 package.json，两种布局都能命中。
  */
@@ -55,8 +55,12 @@ export const findRepoRoot = (startDir: string): string => {
 const REPO_ROOT = findRepoRoot(resolve(fileURLToPath(new URL('.', import.meta.url))));
 const FRONTEND_DIST = join(REPO_ROOT, 'frontend', 'dist');
 const SPA_INDEX = join(FRONTEND_DIST, 'index.html');
-/** 旧版静态页面（未构建 Vue 产物时的兜底），沿用 Python 的位置 app/static */
-const LEGACY_STATIC_DIR = join(REPO_ROOT, 'app', 'static');
+/**
+ * 旧版静态页面（未构建 Vue 产物时的兜底）。
+ * 原本随 Python 实现放在 app/static/，Python 代码移除后独立到 legacy-static/ ——
+ * 否则删掉 app/ 会让「没有前端产物的部署」连 /login 都打不开。
+ */
+const LEGACY_STATIC_DIR = join(REPO_ROOT, 'legacy-static');
 
 /**
  * 安全修复 C4：Content-Security-Policy 等安全响应头。
@@ -86,7 +90,7 @@ const DEV_CORS_ORIGINS: readonly string[] = [
 ];
 
 /**
- * 旧版静态页面（app/static/*.html）。
+ * 旧版静态页面（legacy-static/*.html）。
  * 缺文件时返回 503 + 明确文案，而不是让 readFileSync 抛 ENOENT —— 后者在日志里
  * 只是一串堆栈，看不出到底是前端没构建还是路径算错了。
  */
@@ -95,7 +99,7 @@ const sendLegacyPage = (reply: FastifyReply, name: string): FastifyReply => {
   if (!existsSync(filePath)) {
     return reply.code(503).type('text/plain').send(
       `静态页面缺失：${filePath}。请先构建前端（frontend/dist/index.html），`
-      + '或确认仓库里存在 app/static/',
+      + '或确认仓库里存在 legacy-static/',
     );
   }
   return reply.type('text/html').send(readFileSync(filePath, 'utf8'));

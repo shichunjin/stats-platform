@@ -12,7 +12,7 @@
 #      用户登录后 W: 盘自动映射到 \\127.0.0.1\workspace\<自己的用户名>
 #   4. 可选：为已存在的平台用户批量开通/修复私有目录（-ProvisionUsers）
 #
-# 目录约定（与后端 app/config.py、app/transfer.py 一致）：
+# 目录约定（与后端 src/config/env.ts、src/integrations/transfer.ts 一致）：
 #   W: 盘 -> C:\workspace\<用户名>   （获取数据 / 筛选生成的 Excel）
 #   结果暂存 -> C:\pending\<用户名>
 #   每个用户目录的 NTFS ACL：仅本人 / SYSTEM / Administrators
