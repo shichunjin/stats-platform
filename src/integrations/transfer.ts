@@ -54,8 +54,11 @@ export class TransferError extends Error {
  * ⚠️ 安全说明：Python 版用 AutoAddPolicy（等价于无中间人防护）。这里保留了
  * 同样的首次信任行为，但把它收敛到单一回调并每次告警 —— 后续若配置
  * SFTP_KNOWN_HOSTS，只需替换这个函数体。
+ *
+ * **host 参数（云桌面改造）**：原本只连 settings.sftpHost（中心文件服务器）。
+ * 多 VM 后账号同步还要连「用户自己的 VM」，故允许覆盖目标主机；不传 = 沿用现状。
  */
-export const connectSsh = async (): Promise<SshClient> => {
+export const connectSsh = async (host?: string): Promise<SshClient> => {
   const { sftpHost, sftpPort, sftpUsername, sftpKeyPath, sftpPassphrase } = getSettings();
 
   const keyPath = expandHome(sftpKeyPath);
@@ -71,7 +74,7 @@ export const connectSsh = async (): Promise<SshClient> => {
     ssh.once('error', (error: Error) => reject(new TransferError('SSH 连接失败', error)));
 
     ssh.connect({
-      host: sftpHost,
+      host: host ?? sftpHost,
       port: sftpPort,
       username: sftpUsername,
       privateKey: readFileSync(keyPath),

@@ -65,19 +65,34 @@ export const hashPassword = (password: string, salt: Buffer): Buffer =>
 const connectionName = (username: string): string =>
   `${getSettings().guacConnectionPrefix}${username}`;
 
+/**
+ * RDP 目标（云桌面改造引入）。
+ *
+ * 原实现只连 `settings.rdsHost`（共享 RDS 主机）。多 VM 后每台 VM 一个 IP，
+ * 连接参数必须能按实例覆盖 —— 不传 target 即沿用现状，**行为零变化**。
+ */
+export interface RdpTarget {
+  readonly hostname: string;
+  readonly port?: number;
+}
+
 /** 构建专属 RDP 连接参数（参数名遵循 Guacamole RDP 协议标准） */
 export const buildRdpParameters = (
   username: string,
   password: string | null,
+  target?: RdpTarget | null,
 ): Readonly<Record<string, string>> => {
   const {
     rdsHost, rdsPort, guacRdpAutoLogin, guacRdpDomain, guacRdpSecurity,
     guacRdpIgnoreCert, guacRecordingRoot,
   } = getSettings();
 
+  const hostname = target?.hostname ?? rdsHost;
+  const port = target?.port ?? rdsPort;
+
   const params: Record<string, string> = {
-    hostname: rdsHost,
-    port: String(rdsPort),
+    hostname,
+    port: String(port),
     // 客户端窗口大小随浏览器自适应
     'resize-method': 'display-update',
     // 安全修复 A3：通道管控（强制，不受配置项影响）
@@ -167,11 +182,25 @@ const setUserPassword = async (
   }
 };
 
+/**
+ * 参数指纹。
+ *
+ * 同步连接是「DELETE 全部参数 + 重新 INSERT」，几十条 DML；DMS 每次 ensure
+ * 都做一遍会白白放大 guacamole_db 的写压力。存下指纹，只有参数真变了才重写。
+ */
+export const hashParameters = (
+  params: Readonly<Record<string, string>>,
+): string => createHash('sha256')
+  .update(JSON.stringify(Object.entries(params).sort(([a], [b]) => a.localeCompare(b))))
+  .digest('hex')
+  .slice(0, 64);
+
 /** 创建或更新用户专属 RDP 连接，返回 connection_id（参数每次全量重写） */
 const ensureConnection = async (
   conn: GuacConnection,
   username: string,
   password: string | null,
+  target?: RdpTarget | null,
 ): Promise<number> => {
   const name = connectionName(username);
 
@@ -200,7 +229,7 @@ const ensureConnection = async (
     [connectionId],
   );
 
-  const params = buildRdpParameters(username, password);
+  const params = buildRdpParameters(username, password, target);
   for (const [key, value] of Object.entries(params)) {
     await conn.query(
       'INSERT INTO guacamole_connection_parameter (connection_id, parameter_name, parameter_value) '
@@ -273,10 +302,32 @@ export const upsertGuacUser = async (username: string, password: string): Promis
 };
 
 /**
- * 为已存在的 Guacamole 用户补齐专属连接（老用户补偿/连接被误删）。
+ * 为已存在的 Guacamole 用户补齐/改写专属连接（老用户补偿 / VM 重建后改指新 IP）。
  * 不掌握明文密码，因此只建连接与授权、不改密码（自动登录参数中不写 password）。
+ *
+ * @param target 传了就把连接指向该主机（用户专属 VM）；不传沿用共享 RDS 主机。
  */
-export const ensureUserConnection = async (username: string): Promise<number | null> => {
+export const ensureUserConnection = async (
+  username: string,
+  target?: RdpTarget | null,
+): Promise<number | null> => {
+  const detail = await ensureUserConnectionDetail(username, target);
+  return detail?.connectionId ?? null;
+};
+
+export interface GuacConnectionIds {
+  readonly connectionId: number;
+  readonly entityId: number;
+}
+
+/**
+ * 同上，但连 `guacamole_entity.entity_id` 一并返回 —— DMS 要把连接映射落进
+ * `guac_connection_map`（跨库引用），只拿 connection_id 不够。
+ */
+export const ensureUserConnectionDetail = async (
+  username: string,
+  target?: RdpTarget | null,
+): Promise<GuacConnectionIds | null> => {
   if (!guacSyncEnabled()) return null;
 
   return inTransaction(async (conn) => {
@@ -287,9 +338,9 @@ export const ensureUserConnection = async (username: string): Promise<number | n
     if (row.rows.length === 0) return null;
 
     const entityId = Number(row.rows[0]![0]);
-    const connectionId = await ensureConnection(conn, username, null);
+    const connectionId = await ensureConnection(conn, username, null, target);
     await grantRead(conn, entityId, connectionId);
-    return connectionId;
+    return { connectionId, entityId };
   });
 };
 

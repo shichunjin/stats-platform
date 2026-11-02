@@ -232,6 +232,39 @@ export const settingsSchema = z.object({
   guacRecordingRoot: z.string().default(''),
 
   psLoginScript: z.string().default(String.raw`\\fileserver\scripts\login.ps1`),
+
+  /* ---------------- 云桌面 DMS（docs/multi-vm-desktop-plan.md 第 6/7 章） ----------------
+   * 默认全部关闭：未配置 Proxmox 时 DMS 不起 worker、不建表数据，`desktop_mode='rds'`
+   * 的用户走原有共享桌面路径，行为与改造前完全一致（灰度前提）。
+   */
+
+  /** 全局开关。false = /desktop/* 一律 503，/session/connect 维持原 RDS 行为 */
+  desktopEnabled: boolFromEnv(false),
+  /** 进程内 worker 开关（关掉可用于排查：任务只入队不执行） */
+  desktopWorkerEnabled: boolFromEnv(false),
+  desktopWorkerIntervalMs: intFromEnv(5_000),
+  /** 单进程即保证 worker 唯一（不引入 Redis/MQ）；这里只限制每轮取任务数 */
+  desktopWorkerBatch: intFromEnv(1),
+  /** 任务失败重试的退避基数（毫秒），实际间隔 = base * 2^(attempts-1)，上限 60s */
+  desktopRetryBackoffMs: intFromEnv(2_000),
+
+  /** 桌面网段（IPAM）。留空 = 不启用静态 IP，依赖 Guest Agent 回读 */
+  desktopSubnet: z.string().default(''),
+  desktopGateway: z.string().default(''),
+  desktopVlanId: intFromEnv(0),
+  /** VM 名称前缀：DESK-alice */
+  desktopNamePrefix: z.string().default('DESK-'),
+
+  proxmoxApiUrl: z.string().default(''),
+  /** 'root@pam!dms' */
+  proxmoxTokenId: z.string().default(''),
+  proxmoxTokenSecret: z.string().default(''),
+  proxmoxNode: z.string().default(''),
+  proxmoxStorage: z.string().default(''),
+  proxmoxBridge: z.string().default(''),
+  /** C7：默认 false（生产须用有效证书）；自签环境才开 */
+  proxmoxInsecureTls: boolFromEnv(false),
+  proxmoxTimeoutMs: intFromEnv(15_000),
 });
 
 export type Settings = z.infer<typeof settingsSchema>;

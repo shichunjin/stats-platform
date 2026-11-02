@@ -151,19 +151,29 @@ foreach ($d in @((Join-Path $workspaceRoot $username), (Join-Path $pendingRoot $
 Write-Output 'STATS_WINDOWS_WORKSPACE_READY'
 `.trimStart();
 
-export const buildAccountScript = (username: string, password: string): string => {
+/**
+ * 只建账号与加组（PS_SCRIPT 部分）。
+ *
+ * 云桌面改造后必须区分两种目标（方案 3.4 / 附录 D）：
+ *  - **文件服务器**：账号 + 工作区（SMB 共享、NTFS ACL）→ 用 `buildAccountScript`
+ *  - **用户 VM**：**只建账号**，绝不跑 workspace 脚本 —— 在 VM 上执行会试图
+ *    把 VM 变成文件服务器（建共享 + 改 ACL），数据落点就散了。
+ */
+export const buildAccountOnlyScript = (username: string, password: string): string => {
   const { windowsPasswordNeverExpires } = getSettings();
-  return [
-    fill(PS_SCRIPT, {
-      username: psQuote(username),
-      password: psQuote(password),
-      sid_users: SID_USERS,
-      sid_rdp: SID_REMOTE_DESKTOP_USERS,
-      password_never_expires: windowsPasswordNeverExpires ? '$true' : '$false',
-    }),
-    buildWorkspaceScript(username, false),
-  ].join('\n');
+  return fill(PS_SCRIPT, {
+    username: psQuote(username),
+    password: psQuote(password),
+    sid_users: SID_USERS,
+    sid_rdp: SID_REMOTE_DESKTOP_USERS,
+    password_never_expires: windowsPasswordNeverExpires ? '$true' : '$false',
+  });
 };
+
+export const buildAccountScript = (username: string, password: string): string => [
+  buildAccountOnlyScript(username, password),
+  buildWorkspaceScript(username, false),
+].join('\n');
 
 export const buildWorkspaceScript = (username: string, deepReset: boolean): string => {
   const { windowsWorkspaceDir, windowsPendingDir } = getSettings();
@@ -181,7 +191,12 @@ export const buildWorkspaceScript = (username: string, deepReset: boolean): stri
  * 在 Windows 上经 SSH 执行 PowerShell：
  * 脚本以 UTF-16LE Base64 载荷嵌在 ASCII 包装器里，`powershell -Command -` 从 stdin 读。
  */
-const runRemotePs = async (script: string, action: string, username: string): Promise<void> => {
+const runRemotePs = async (
+  script: string,
+  action: string,
+  username: string,
+  target?: string,
+): Promise<void> => {
   // Node 的 Buffer 直接支持 utf16le，无需手工换算
   const encoded = Buffer.from(script, 'utf16le').toString('base64');
   const wrapper = `$__s = [Text.Encoding]::Unicode.GetString([Convert]::FromBase64String('${encoded}')); `
@@ -190,7 +205,7 @@ const runRemotePs = async (script: string, action: string, username: string): Pr
 
   let ssh;
   try {
-    ssh = await connectSsh();
+    ssh = await connectSsh(target);
   } catch (error) {
     throw new WindowsAccountError('无法连接 Windows 云主机', error);
   }
@@ -220,8 +235,22 @@ export const windowsSyncEnabled = (): boolean => {
   return Boolean(windowsAccountSync && sftpHost);
 };
 
-/** 注册/改密后同步：创建或更新 Windows 本地账号，并保障私有工作区 */
-export const syncWindowsUser = async (username: string, password: string): Promise<boolean> => {
+export interface SyncWindowsOptions {
+  /** 目标主机：null/省略 = 中心文件服务器（现状）；传 VM IP = 同步用户 VM */
+  readonly host?: string;
+  /**
+   * 是否同时保障工作区（SMB 共享 + NTFS ACL）。
+   * 默认 true（现状，文件服务器）；**同步 VM 时必须传 false**（见 buildAccountOnlyScript 注释）。
+   */
+  readonly workspace?: boolean;
+}
+
+/** 注册/改密后同步：创建或更新 Windows 本地账号，并（可选）保障私有工作区 */
+export const syncWindowsUser = async (
+  username: string,
+  password: string,
+  options: SyncWindowsOptions = {},
+): Promise<boolean> => {
   if (!getSettings().windowsAccountSync) return false;
 
   validateWindowsUsername(username);
@@ -230,7 +259,11 @@ export const syncWindowsUser = async (username: string, password: string): Promi
     throw new WindowsAccountError('密码中不允许包含控制字符');
   }
 
-  await runRemotePs(buildAccountScript(username, password), '同步账号', username);
+  const workspace = options.workspace ?? true;
+  const script = workspace
+    ? buildAccountScript(username, password)
+    : buildAccountOnlyScript(username, password);
+  await runRemotePs(script, '同步账号', username, options.host);
   return true;
 };
 

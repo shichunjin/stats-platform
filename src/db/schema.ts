@@ -34,7 +34,14 @@ export type TemplateStatus = 'active' | 'disabled' | 'building' | 'error';
 export type DesktopVmPowerState = 'unknown' | 'running' | 'stopped' | 'suspended';
 export type DeskInstanceStatus =
   | 'new' | 'provisioning' | 'configuring' | 'booting' | 'probing'
-  | 'ready' | 'connected' | 'idle' | 'suspended' | 'failed' | 'error' | 'destroyed';
+  | 'ready' | 'connected' | 'idle' | 'suspended' | 'failed' | 'error' | 'destroyed'
+  /**
+   * VM 已就绪但里面还没有用户的 Windows 本地账号。
+   * 成因（方案 A′ 的代价）：VM 账号密码 = 平台密码，而平台只存哈希、拿不到明文，
+   * 只能在用户注册/改密那一刻同步。懒创建的 VM 首次建好时必然处于该状态。
+   * 此时 RDP 能连上但登不进去 —— 前端必须提示改密，绝不能显示「就绪」。
+   */
+  | 'awaiting_account';
 export type DesktopTaskStatus =
   'pending' | 'running' | 'success' | 'failed' | 'error' | 'cancelled';
 export type DesktopTaskType =
@@ -288,6 +295,10 @@ export const deskInstances = pgTable('desk_instances', {
   /** 分配规格（v2.1 A12：quota.default_* ?? template.*，rebuild 时重算） */
   specVcpu: integer('spec_vcpu'),
   specMemoryMb: integer('spec_memory_mb'),
+  /** VM 内 Windows 本地账号已同步的时间（null = 尚未同步，走 awaiting_account） */
+  accountSyncedAt: utcTimestamp('account_synced_at'),
+  /** 已同步进 VM 的密码版本；落后于 users.password_version 时需在开机前补偿（方案 9.2） */
+  passwordVersion: integer('password_version'),
   status: varchar('status', { length: 16 }).$type<DeskInstanceStatus>().notNull().default('new'),
   lastError: text('last_error'),
   lastErrorAt: utcTimestamp('last_error_at'),
@@ -303,7 +314,7 @@ export const deskInstances = pgTable('desk_instances', {
   /** 一人仅一个「活跃」桌面（并发冲突第一道防线）；error/destroyed 不占位，可重新分配 */
   activeUserIdx: uniqueIndex('uq_desk_instances_active_user')
     .on(table.userId)
-    .where(sql`${table.status} in ('new','provisioning','configuring','booting','probing','ready','connected','idle','suspended','failed')`),
+    .where(sql`${table.status} in ('new','provisioning','configuring','booting','probing','ready','awaiting_account','connected','idle','suspended','failed')`),
   statusIdx: index('ix_desk_instances_status').on(table.status),
   idleIdx: index('ix_desk_instances_idle')
     .on(table.lastDisconnectedAt)

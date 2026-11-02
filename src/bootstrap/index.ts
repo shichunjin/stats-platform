@@ -6,6 +6,7 @@
  */
 import { initDemoData } from './demo.js';
 import { promoteBuiltinAdmin, runMigrations } from './migrate.js';
+import { startDesktopWorkerLoop } from './worker.js';
 
 export const bootstrap = async (migrationsFolder?: string): Promise<void> => {
   await runMigrations(migrationsFolder);
@@ -17,6 +18,10 @@ export const bootstrap = async (migrationsFolder?: string): Promise<void> => {
   }
 
   await initDemoData();
+
+  // 云桌面 worker：同进程 setInterval（方案 6.5）。单进程部署天然保证只有一个 worker。
+  // 未启用时（默认）不启动 —— 避免本地/老环境出现连不上 Proxmox 的噪音日志。
+  startDesktopWorkerLoop();
 };
 
 export { initDemoData, promoteBuiltinAdmin, runMigrations };

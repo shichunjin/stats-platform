@@ -329,6 +329,46 @@ export const toDataApplyOut = (row: DataApply): z.infer<typeof dataApplyOutSchem
 });
 
 /* ================================================================
+ * 云桌面（多 VM）—— docs/multi-vm-desktop-plan.md 6.6
+ * ================================================================ */
+
+export const desktopEnsureOutSchema = z.object({
+  /** rds = 走共享桌面（灰度未开启/未配置）；vm = 专属虚拟机 */
+  mode: z.enum(['rds', 'vm']).openapi({ description: '桌面模式：rds=共享桌面 / vm=专属虚拟机' }),
+  instance_id: z.number().int().nullable().openapi({ description: '桌面实例 ID；rds 模式为 null' }),
+  status: z.string().nullable().openapi({
+    description: '实例状态：new/provisioning/booting/ready/awaiting_account/failed…；'
+      + 'awaiting_account = VM 已就绪但还没同步 Windows 账号，需改一次密码',
+  }),
+  /** 前端据此决定按钮文案与是否可跳转 */
+  ready: z.boolean().openapi({ description: '是否已可连接（ready/awaiting_account）' }),
+  created: z.boolean().openapi({ description: '本次调用是否新建了实例（false = 命中已有实例）' }),
+  task_id: z.number().int().nullable().openapi({ description: '入队的任务 ID；-1 表示未重复入队' }),
+  vm_ip: z.string().nullable().openapi({ description: '桌面 VM 的 IP（未分配时为 null）' }),
+});
+
+/** 状态 → 前端可用性。awaiting_account 也算「可连」但要在 UI 上提示改密 */
+const isConnectableStatus = (status: string | null): boolean =>
+  status === 'ready' || status === 'awaiting_account';
+
+export const toDesktopEnsureOut = (outcome: {
+  readonly mode: 'rds' | 'vm';
+  readonly instanceId: number | null;
+  readonly status: string | null;
+  readonly created: boolean;
+  readonly taskId: number | null;
+  readonly vmIp: string | null;
+}): z.infer<typeof desktopEnsureOutSchema> => ({
+  mode: outcome.mode,
+  instance_id: outcome.instanceId,
+  status: outcome.status,
+  ready: isConnectableStatus(outcome.status),
+  created: outcome.created,
+  task_id: outcome.taskId,
+  vm_ip: outcome.vmIp,
+});
+
+/* ================================================================
  * wire 类型
  * ================================================================ */
 
