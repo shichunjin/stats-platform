@@ -45,6 +45,16 @@
 | **A14** | 隐含「规格可调」 | **明确不可行边界**：运行中热加 CPU/内存对 Windows 桌面不可靠（virtio-balloon 只能回收不能实时增；CPU hotplug 需 guest 配合）；磁盘只能扩不能缩且需 guest 内扩分区。**变更规格 = 走 rebuild**。`desktop_templates.disk_gb` 降级为**磁盘下限** | 6.3、9.7 |
 | **A15** | 挂起只写了「释放内存」 | **补唤醒副作用**：Windows 时间漂移、SMB 会话已被服务端断开（W:/Z: 短暂红叉后自动重连）。方案 A′ 三端同密码在这里是**必需前提**——v1 的每 VM 随机密码模型下，唤醒后 SMB 重连直接失败。这是密码模型的第二个论据 | 9.5 |
 
+### v2.2 增补（2026-11-03 阶段 5 落地后：写代码暴露的缺口）
+
+按定稿方案动手写 `src/desktop/` 时暴露三条文档没覆盖的事实，其中 **A16 是方案本身的缺口，不是实现细节**：
+
+| # | 缺口 | 处理 | 影响面 |
+|---|---|---|---|
+| **A16** | **方案 A′ + 懒创建 = 首次创建的 VM 里没有 Windows 账号。** 方案 A′ 要求 VM 账号密码 = 平台密码，但平台只存 bcrypt 哈希、拿不到明文，而明文只在注册/改密那一刻可得。文档 9.2 写的「VM 离线则记 `password_version` 落后、下次 booting 前补偿」**不成立**——补偿同样需要明文 | 新增状态 **`awaiting_account`**：VM 就绪但账号未同步，前端必须提示「请修改一次密码以激活桌面」；`desk_instances` 加 `account_synced_at` / `password_version` 两列；`syncVmAccount()` 只在**拿得到明文**的时刻调用。备选（未采纳）：① 注册即预创建 VM（放弃懒创建，30 台常开成本翻倍）；② 改密时暂存加密凭据（等于引入密钥管理，违背 Q10 不引入中间件） | 5.1、7.4、9.2 |
+| **A17** | v2 只说「不引入 Redis/MQ」，没说任务队列放哪 | **用 PostgreSQL `FOR UPDATE SKIP LOCKED` 做队列**（`desktop_tasks`），worker 是同进程 `setInterval`。理由：`src/services/jobs.ts` 那套内存队列（Set + 数组）进程重启即丢，而克隆一台 VM 要几分钟，丢任务的后果是用户永远卡在 provisioning。单进程部署天然保证 worker 唯一（不需要选主） | 6.5、7.8 |
+| **A18** | 7.2 的 `provider_ref` 示例写作 `node=pve1,vmid=9001` | 统一为 **`<node>/<vmid>`**（如 `pve1/9101`）：`/` 分隔可直接 split 出节点，多节点部署时不必再解析 kv 串 | 7.2 |
+
 ### 未变的部分
 
 第 3 章架构、第 4 章选型（仍推荐 Proxmox VE）、第 5 章状态机与异常矩阵、
@@ -582,7 +592,12 @@ READY ──用户打开──> CONNECTED ──断开──> IDLE ──7天─
                         └──异常──> FAILED  └──再连接──> BOOTING(唤醒)
 ```
 
-`desk_instances.status`：`new | provisioning | configuring | booting | probing | ready | connected | idle | suspended | failed | error | destroyed`
+`desk_instances.status`：`new | provisioning | configuring | booting | probing | ready | awaiting_account | connected | idle | suspended | failed | error | destroyed`
+
+> **v2.2 新增 `awaiting_account`**（写代码时发现的方案 A′ 时序缺口，详见 0-bis A16）：
+> VM 建好后里面**没有**用户的 Windows 账号 —— 平台只存密码哈希、拿不到明文，
+> 而方案 A′ 要求 VM 账号密码 = 平台密码。此时 RDP 能连上但登不进去，
+> 必须提示用户改一次密码（改密链路里才拿得到明文），**绝不能显示成 ready**。
 `desktop_vms.power_state`：`unknown | stopped | running | suspended`
 
 ### 5.2 完整时序（`POST /session/connect`）
@@ -933,7 +948,7 @@ CREATE TABLE desktop_templates (
   os_type                  varchar(32)  NOT NULL DEFAULT 'windows',
   os_version               varchar(64),                           -- 'Windows Server 2022 Datacenter'
   provider                 varchar(32)  NOT NULL,                 -- proxmox|libvirt|vmware|hyperv|ecs
-  provider_ref             varchar(128) NOT NULL,                 -- 'node=pve1,vmid=9001' / 'm-xxx'
+  provider_ref             varchar(128) NOT NULL,                 -- Proxmox 'pve1/9001'(<node>/<vmid>) / ECS 'm-xxx'
   provider_node            varchar(64),                           -- Proxmox 节点名
   vcpu                     integer      NOT NULL,             -- 基线 vCPU（可被配额 default_vcpu 覆盖，见 7.6）
   memory_mb                integer      NOT NULL,             -- 基线内存（可被配额 default_memory_mb 覆盖）
@@ -1008,6 +1023,8 @@ CREATE TABLE desk_instances (
   last_error_at     timestamp,
   provision_started_at  timestamp,
   provision_finished_at timestamp,
+  account_synced_at    timestamp,                       -- v2.2：VM 内 Windows 账号同步时间（null=未同步 → awaiting_account）
+  password_version     integer,                         -- v2.2：已同步进 VM 的密码版本（落后于 users.password_version 需补偿）
   last_connected_at    timestamp,
   last_disconnected_at timestamp,
   connect_count     integer NOT NULL DEFAULT 0,
@@ -1018,7 +1035,7 @@ CREATE TABLE desk_instances (
 -- 一人仅一个「活跃」桌面（并发冲突的第一道防线）
 CREATE UNIQUE INDEX uq_desk_instances_active_user
   ON desk_instances (user_id)
-  WHERE status IN ('new','provisioning','configuring','booting','probing','ready','connected','idle','suspended','failed');
+  WHERE status IN ('new','provisioning','configuring','booting','probing','ready','awaiting_account','connected','idle','suspended','failed');
 CREATE INDEX ix_desk_instances_status   ON desk_instances (status);
 CREATE INDEX ix_desk_instances_idle     ON desk_instances (last_disconnected_at) WHERE status IN ('idle','suspended');
 CREATE INDEX ix_desk_instances_updated  ON desk_instances (updated_at);
