@@ -60,8 +60,15 @@ await runMigrations();
 
 /* ---- 清库工具 ---- */
 
-/** 所有业务表，按外键依赖倒序 TRUNCATE */
+/** 所有业务表，按外键依赖倒序 TRUNCATE（循环外键 desk_instances ↔ desktop_vms 必须同语句出现） */
 const TABLES = [
+  'guac_connection_map',
+  'desktop_tasks',
+  'desktop_ip_allocations',
+  'desktop_vms',
+  'desk_instances',
+  'desktop_quotas',
+  'desktop_templates',
   'messages',
   'guac_auth_tokens',
   'platform_config',

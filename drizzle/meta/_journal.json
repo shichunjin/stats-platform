@@ -8,6 +8,13 @@
       "when": 1793518957925,
       "tag": "0000_real_arclight",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1793624784483,
+      "tag": "0001_giant_mystique",
+      "breakpoints": true
     }
   ]
 }
