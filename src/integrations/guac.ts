@@ -84,7 +84,7 @@ export const buildRdpParameters = (
 ): Readonly<Record<string, string>> => {
   const {
     rdsHost, rdsPort, guacRdpAutoLogin, guacRdpDomain, guacRdpSecurity,
-    guacRdpIgnoreCert, guacRecordingRoot,
+    guacRdpIgnoreCert, guacRecordingRoot, guacClipboardEnabled,
   } = getSettings();
 
   const hostname = target?.hostname ?? rdsHost;
@@ -95,9 +95,10 @@ export const buildRdpParameters = (
     port: String(port),
     // 客户端窗口大小随浏览器自适应
     'resize-method': 'display-update',
-    // 安全修复 A3：通道管控（强制，不受配置项影响）
-    'disable-copy': 'true',   // 禁用 远程 → 浏览器 剪贴板复制
-    'disable-paste': 'true',  // 禁用 浏览器 → 远程 剪贴板粘贴
+    // 安全修复 A3：通道管控。剪贴板按 guacClipboardEnabled 放行（默认允许，
+    // 业务需要复制粘贴）；驱动器/打印重定向仍然强制关闭，不受配置影响。
+    'disable-copy': String(!guacClipboardEnabled),   // 远程 → 浏览器 复制
+    'disable-paste': String(!guacClipboardEnabled),  // 浏览器 → 远程 粘贴
     'disable-drive': 'true',  // 禁用 Guacamole 虚拟盘（浏览器传文件通道）
     'disable-print': 'true',  // 禁用远程打印（PDF 重定向下载）
     'enable-drive': 'false',

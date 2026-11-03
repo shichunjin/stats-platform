@@ -513,8 +513,8 @@ sudo docker compose logs guacamole   # 查看日志无报错
 |--------|-----|------|
 | `security` | `tls` | 使用 TLS 安全层（配合 Windows 关闭 NLA） |
 | `ignore-cert` | `true` | 忽略自签名证书 |
-| `disable-copy` | `true` | 禁用剪贴板复制 |
-| `disable-paste` | `true` | 禁用剪贴板粘贴 |
+| `disable-copy` | `false` | 放行剪贴板复制（由 `GUAC_CLIPBOARD_ENABLED` 控制，默认放行；置 `false` 恢复全禁） |
+| `disable-paste` | `false` | 放行剪贴板粘贴（同上） |
 | `disable-drive` | `true` | 禁用本地驱动器映射 |
 | `disable-printing` | `true` | 禁用打印重定向 |
 

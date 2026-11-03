@@ -283,7 +283,11 @@ describe('注册同步', () => {
   });
 
   it('A3：外带通道强制禁用，录像目录按用户隔离', async () => {
-    overrideSettings({ guacDriveRoot: '/guacd/drives', guacRecordingRoot: '/guacd/records' });
+    overrideSettings({
+      guacDriveRoot: '/guacd/drives',
+      guacRecordingRoot: '/guacd/records',
+      guacClipboardEnabled: false,
+    });
 
     await request(app, {
       method: 'POST', url: '/auth/register',
@@ -520,11 +524,28 @@ describe('A3 通道管控', () => {
     overrideSettings({ guacDriveRoot: '/data/drive', guacRecordingRoot: '' });
 
     const params = buildRdpParameters('alice', 'pw');
-    expect(params['disable-copy']).toBe('true');
-    expect(params['disable-paste']).toBe('true');
     expect(params['disable-drive']).toBe('true');
     expect(params['disable-print']).toBe('true');
     expect(params['enable-drive']).toBe('false');
     expect(params).not.toHaveProperty('drive-path');
+  });
+
+  it('剪贴板默认放行（业务需要复制粘贴）', () => {
+    overrideSettings({ guacClipboardEnabled: true });
+
+    const params = buildRdpParameters('alice', 'pw');
+    expect(params['disable-copy']).toBe('false');
+    expect(params['disable-paste']).toBe('false');
+    // 剪贴板放行不影响驱动器/打印的强制关闭
+    expect(params['disable-drive']).toBe('true');
+    expect(params['disable-print']).toBe('true');
+  });
+
+  it('GUAC_CLIPBOARD_ENABLED=false 时恢复 A3 全禁', () => {
+    overrideSettings({ guacClipboardEnabled: false });
+
+    const params = buildRdpParameters('alice', 'pw');
+    expect(params['disable-copy']).toBe('true');
+    expect(params['disable-paste']).toBe('true');
   });
 });

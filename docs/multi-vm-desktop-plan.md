@@ -191,7 +191,7 @@
 | 连接命名 | `windows-{username}`（`GUAC_CONNECTION_PREFIX` 可配） |
 | 授权模型 | 只 `INSERT guacamole_connection_permission(permission='READ')`，**只授本人**。用户之间互不可见 |
 | 参数写入 | 每次同步**先 DELETE 全部 parameter 再全量 INSERT**（`_ensure_connection`）。这一点极其重要：它让「改主机地址」变成天然幂等的操作 |
-| 安全参数 | 强制 `disable-copy/disable-paste/disable-drive/disable-print=true`、`enable-drive/enable-printing=false`（安全修复 A3，不受配置影响） |
+| 安全参数 | 强制 `disable-drive/disable-print=true`、`enable-drive/enable-printing=false`；`disable-copy/disable-paste` 由 `GUAC_CLIPBOARD_ENABLED` 控制（默认放行，置 `false` 恢复 A3 全禁） |
 | RDP 安全 | `security=nla` 默认，`ignore-cert` 默认关；README 排错章节给的是 `security=tls` + 关 NLA + `ignore-cert=true` 的实测组合（**两处存在配置张力，见 2.10**） |
 | 免密直连 | `GUACAMOLE_URL=.../guacamole/#/client/`，后端拼 `{url}{connection_id}?token=...` |
 | 录像 | `GUAC_RECORDING_ROOT` 为空则**不录像**（当前生产大概率未开启） |
@@ -277,7 +277,7 @@
 3. **免密直连链路完整**——authToken 缓存 + URL 拼接，前端只认 `guac_url`，VM 换了前端也不用改。
 4. **数据出口唯一**——只从 `C:\pending\{用户}` 回拉，配合相似度审核，形成闭环；这套逻辑与「用户在哪台机器上操作」解耦。
 5. **账户同步是 SSH + 幂等 PowerShell**——同一套封装可以直接复用到「往每台 VM 里建账号」，只是 host 从固定值变成动态 IP。
-6. **安全通道默认全关**——`disable-copy/paste/drive/print` 写死在代码里，不受配置影响，迁移到 VM 后依然生效。
+6. **通道管控**——`disable-drive/print` 写死在代码里；剪贴板（`disable-copy/paste`）改为配置项 `GUAC_CLIPBOARD_ENABLED`（默认放行，业务需要复制粘贴），迁移到 VM 后行为一致。
 
 ### 2.10 当前架构的风险与改造限制
 
@@ -539,7 +539,7 @@ commit tx (业务库):
 |---|---|
 | `guacamole/initdb.sql`（官方 schema） | 不要用自定义列污染官方表；所有扩展信息放业务库 `guac_connection_map` |
 | 连接命名规则 `windows-{username}` | 前端、审计、运维、免密 URL 全依赖它 |
-| `disable-copy/paste/drive/print` 强制项 | 安全基线，不随架构变 |
+| `disable-drive/print` 强制项 | 安全基线，不随架构变；剪贴板由 `GUAC_CLIPBOARD_ENABLED` 控制 |
 | 导出审核与相似度阈值机制 | 与桌面位置无关，改动只会引入风险 |
 | `pending_files` 唯一索引 / `content_sha` 复核 | 并发安全基线 |
 | 现有 9 张业务表的既有字段 | 只 `ADD COLUMN`，不改不删 |

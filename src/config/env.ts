@@ -227,6 +227,14 @@ export const settingsSchema = z.object({
   guacRdpSecurity: z.string().default('nla'),
   /** C7：默认 false —— 生产应使用有效证书 + NLA */
   guacRdpIgnoreCert: boolFromEnv(false),
+  /**
+   * 剪贴板（远程 ↔ 浏览器）是否放行。
+   *
+   * 默认 true：业务上需要「复制报表数值 → 粘到本地工具」这类操作。
+   * 置 false 恢复 A3 安全基线（disable-copy/disable-paste 全禁用）。
+   * 注意驱动器/打印重定向仍强制关闭，不受此项影响。
+   */
+  guacClipboardEnabled: boolFromEnv(true),
   /** 已废弃（A3）：文件进出一律走 W: 盘 + 平台审批流程 */
   guacDriveRoot: z.string().default(''),
   guacRecordingRoot: z.string().default(''),

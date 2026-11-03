@@ -76,7 +76,7 @@
 | 数据归属 | 所有查询均带 `user_id == current_user.id` | 越权（IDOR）检查到位 |
 | 数据范围(scopes) | `scopes` / `user_scope` 表已从 ORM 移除 | 已下线，改为「管理员按申请定向下发」 |
 | Windows 物理隔离 | NTFS ACL(仅本人/SYSTEM/Admins) + SMB ABE + 隐藏 C: | 依赖登录脚本与 `enforce-output-location.ps1` |
-| RDP 通道 | `disable-copy/paste/drive/print` 强制写入连接参数 | 有效 |
+| RDP 通道 | `disable-drive/print` 强制写入连接参数；`disable-copy/paste` 由 `GUAC_CLIPBOARD_ENABLED` 控制（默认放行剪贴板，置 `false` 恢复 A3 全禁） | 有效 |
 | 超级管理员产生 | 仅 `python -m app.cli promote`，API 白名单排除 | 设计合理 |
 
 ### 1.4 高风险区域（按风险排序）
