@@ -425,3 +425,105 @@ ECS 控制台 → 实例 → 创建自定义镜像（关机状态，系统盘 80
 > 工作量的真实分布：Provider 约 300 行 + 测试；真正的坑在**首次开机到可 RDP**
 > 这段时间（RunInstances → 系统初始化 → 3389 可连，通常 60~120 s），
 > `start` 任务的总预算要按这个设，别沿用 Proxmox 的 120 s 一把梭。
+
+---
+
+## 8. 从现有单机形态的增量修改（Guacamole 已跑通）
+
+> 前提：现在已跑通的形态是**单机共享 RDS** —— 数据 `C:\StatsData`、工作区
+> `C:\workspace` 都在 Windows 本机，SMB 共享已由 `setup-*.ps1` 建好，
+> 脚本里的 `\\127.0.0.1\...` 指向自己。Guacamole 免密直连正常。
+>
+> 本节目标：**不写一行代码**，把共享根从 `127.0.0.1` 换成固定内网 IP、
+> 平台升级到含桌面 DMS 表的版本、RDP 参数定型。文件服务器暂时仍在
+> Windows 机上（SMB server 是 Windows 自带，SFTP + icacls 链路完全兼容），
+> 等 R1 的 Provider 就绪后再迁 Linux（见 8.5）。
+
+### 8.0 备份与时机（5 分钟）
+
+```powershell
+# Windows（管理员 PowerShell）：控制台快照 + 记录当前 RDP 配置
+reg query "HKLM\SYSTEM\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp" `
+    /v UserAuthentication
+reg query "HKLM\SYSTEM\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp" `
+    /v SecurityLayer
+```
+
+```bash
+# Linux
+cd /opt/stats-platform && cp .env ".env.bak.$(date +%F)"
+```
+
+选低峰期执行：第 2 步会重启 RDP 服务，**在线会话断开一次**（重连即可，数据不丢）。
+
+### 8.1 Linux 侧（10 分钟，不影响在线用户）
+
+```bash
+cd /opt/stats-platform
+git pull && npm ci && npm run build
+npm run db:migrate        # 新增 desktop_* 8 张表 + 0001/0002 两个迁移
+vi .env
+systemctl restart stats-platform
+```
+
+`.env` 改动（其余保持不动，`SFTP_HOST` / `WINDOWS_DATA_DIR` 原样）：
+
+```ini
+# 共享根：从"本机"变为固定 IP（R1 就绪前，文件服务器仍在 Windows 机）
+STATS_FILE_SERVER=<Windows内网IP>
+PS_LOGIN_SCRIPT=\\<Windows内网IP>\scripts\login.ps1
+
+# RDP 参数：与 W4 固化结果对齐（脚本关 NLA ⇒ 必须 tls）
+GUAC_RDP_SECURITY=tls
+GUAC_RDP_IGNORE_CERT=true
+
+# 新架构 DMS 开关：暂不启用。Proxmox Provider 在云上没有宿主可连，
+# 打开只会让 worker 空转报错
+DESKTOP_ENABLED=false
+DESKTOP_WORKER_ENABLED=false
+```
+
+### 8.2 Windows 侧（15 分钟，RDP 会话断开一次）
+
+```powershell
+# 1) 更新脚本（最省：只同步 powershell 目录；或在 Linux 上 scp 过去）
+cd C:\path\to\stats-platform && git pull
+
+# 2) 固化（管理员 PowerShell）
+cd powershell
+Set-ExecutionPolicy Bypass -Scope Process -Force
+.\prepare-desktop-template.ps1 `
+    -FileServer <Windows内网IP> `
+    -GuacdSource  <Linux内网IP> `
+    -PlatformSource <Linux内网IP> `
+    -TemplateName win2022-stats-base
+```
+
+脚本依次完成：注册表 + 机器级环境变量固化 `\\<Windows内网IP>`
+（等效替换四个脚本里所有 `\\127.0.0.1`）→ 部署 `C:\stats-scripts`（含 `lib\`）→
+关 NLA + `SecurityLayer=1` + 禁剪贴板/驱动器/打印机 → 3389/22 按来源收敛 →
+OpenSSH 检查 → 写 `template-manifest.json`。**退出码非 0 时停下看输出，不要继续。**
+
+### 8.3 验证（10 分钟，按顺序）
+
+1. 浏览器登录平台 → 连接桌面 → **免密直连成功**（此时 RDP 走 tls）；
+2. 桌面内 `net use`：W:/Z: 映射仍正确（启动项跑的是新版 `login.ps1`）；
+3. 管理员发起一次数据筛选申请 → Excel 落到用户 W: 盘（SFTP + icacls 链路未动，应无感）；
+4. `Test-Path \\127.0.0.1\workspace` → True（共享根是本机 IP，本机访问一样通）；
+5. `C:\stats-scripts\template-manifest.json` 存在，`login_script_ver` 与
+   `desktop_templates.login_script_ver` 对得上（填库时用）。
+
+### 8.4 明确先不做的
+
+- **sysprep / 做镜像**：会重置这台生产桌面（Administrator 密码清空、SID 重置）。
+  等 ECS Provider 就绪、或另开一台临时机当母机时再做；真要做，先快照 + 选停机窗口。
+- **数据迁 Linux / Samba**：等 R1 一起切（见 8.5）。
+- **`DESKTOP_ENABLED=true`**：现在打开没有任何 VM 可管。
+
+### 8.5 将来迁文件服务器到 Linux 的唯一代码改动点
+
+现状 `src/routers/data.ts:74` 上传后用 `icacls` 锁 NTFS ACL（Windows 专属命令）。
+数据源切到 Linux Samba 后，这一步要换成 Unix 权限等价物（`chmod 700` / 属主收敛）。
+这是整条链路**唯一**必须改代码的地方；SFTP 目标改指向 Linux 本机（`SFTP_HOST=127.0.0.1`、
+`WINDOWS_DATA_DIR=/srv/stats/StatsData`）只需改配置。迁移窗口内用
+`scp -r` 把 `C:\StatsData` 拉回 `/srv/stats/StatsData` 即可。
