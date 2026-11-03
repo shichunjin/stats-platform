@@ -12,7 +12,7 @@
                           VM 上也能找到中心文件服务器（VM 的 127.0.0.1 是自己）
       2. 脚本部署      —— login.ps1 等脚本 + software-registry.json + lib\ 复制到
                           C:\stats-scripts，并锁成「普通用户只读、管理员可改」
-      3. RDP 参数      —— 关 NLA + SecurityLayer=1 + 禁剪贴板/驱动器/打印机重定向
+      3. RDP 参数      —— 关 NLA + SecurityLayer=1 + 剪贴板启用 + 禁驱动器/打印机重定向
       4. 防火墙        —— 3389 仅放行 guacd 源，22 仅放行平台服务器源（可选）
       5. OpenSSH       —— DMS 用 SSH 建/改账号，模板必须预装并开机自启
       6. Guest Agent   —— 检查 qemu-guest-agent（缺失则 DMS 的 agent ping 永远失败）
@@ -149,7 +149,7 @@ Write-Host "      ACL 已锁定（Users 只读，SYSTEM/Administrators 完全控
 # ============================================================
 # 3. RDP 参数
 # ============================================================
-Write-Step "[3/7] RDP 参数（关 NLA + SecurityLayer=1 + 禁用各类重定向）"
+Write-Step "[3/7] RDP 参数（关 NLA + SecurityLayer=1 + 剪贴板启用 + 禁驱动器/打印机重定向）"
 
 $TsPolicy = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows NT\Terminal Services'
 if (-not (Test-Path $TsPolicy)) {
@@ -158,12 +158,12 @@ if (-not (Test-Path $TsPolicy)) {
 Set-ItemProperty -Path $TsPolicy -Name 'fDenyTSConnections'  -Value 0 -Type DWord -Force
 Set-ItemProperty -Path $TsPolicy -Name 'UserAuthentication'  -Value 0 -Type DWord -Force
 Set-ItemProperty -Path $TsPolicy -Name 'SecurityLayer'       -Value 1 -Type DWord -Force
-Set-ItemProperty -Path $TsPolicy -Name 'fDisableClip'        -Value 1 -Type DWord -Force
+Set-ItemProperty -Path $TsPolicy -Name 'fDisableClip'        -Value 0 -Type DWord -Force
 Set-ItemProperty -Path $TsPolicy -Name 'fDisableCdm'         -Value 1 -Type DWord -Force
 Set-ItemProperty -Path $TsPolicy -Name 'fDisablePnp'         -Value 1 -Type DWord -Force
 Set-ItemProperty -Path $TsPolicy -Name 'fSingleSessionPerUser' -Value 1 -Type DWord -Force
 Write-Host "      UserAuthentication=0（关 NLA）、SecurityLayer=1（协商 TLS）" -ForegroundColor Green
-Write-Host "      剪贴板/驱动器/打印机重定向已禁用" -ForegroundColor Green
+Write-Host "      剪贴板保留启用；驱动器/打印机重定向已禁用" -ForegroundColor Green
 Write-Host "      注意：关 NLA 后后端 .env 必须是 GUAC_RDP_SECURITY=tls（配合 GUAC_RDP_IGNORE_CERT=true），" -ForegroundColor Yellow
 Write-Host "        否则 Guacamole 仍按 nla 发起协商，登录必然失败。" -ForegroundColor Yellow
 Write-Host "      注意：以上注册表改动要重启 TermService 才生效（脚本末尾会安排自动重启）。" -ForegroundColor Yellow
