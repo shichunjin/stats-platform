@@ -282,15 +282,19 @@ if (Test-Path $UserPending) {
 }
 
 # ============================================================
-# 6. RDP 剪贴板/本地盘重定向策略（需要管理员；由 configure-rds.ps1 统一下发，
+# 6. RDP 本地盘重定向策略（需要管理员；由 configure-rds.ps1 统一下发，
 #    普通用户登录时写 HKLM 会失败，这里静默跳过）
+# ------------------------------------------------------------
+# 注意：剪贴板（fDisableClip）**不在这里改写**。
+# 本脚本每次登录都会执行，若在此处写 fDisableClip=1，会把模板已经放行的剪贴板
+# 在每次登录时重新关掉（历史上就是这里把手动改好的设置反复刷回去的）。
+# 剪贴板开关统一由 prepare-desktop-template.ps1 固化（fDisableClip=0）。
 # ============================================================
 try {
     $TSConfigPath = "HKLM:\SOFTWARE\Policies\Microsoft\Windows NT\Terminal Services"
     if (-not (Test-Path $TSConfigPath)) {
         New-Item -Path $TSConfigPath -Force -ErrorAction Stop | Out-Null
     }
-    Set-ItemProperty -Path $TSConfigPath -Name "fDisableClip" -Value 1 -Type DWord -ErrorAction Stop
     Set-ItemProperty -Path $TSConfigPath -Name "fDisableCdm" -Value 1 -Type DWord -ErrorAction Stop
 } catch {
     # 非管理员会话：策略已在机器级由 configure-rds.ps1 配置，忽略
