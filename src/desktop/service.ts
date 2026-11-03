@@ -105,6 +105,22 @@ const allocateIp = async (
   return { id: Number(rows[0]!.id), ipAddress: rows[0]!.ip_address };
 };
 
+/**
+ * 从 IPAM 池取一个空闲地址（独立事务）。
+ *
+ * `ensureDesktop` 用的是内部版本（分配与建实例同一个事务，失败一起回滚）；
+ * rebuild 是「已有实例换机」，没有新实例要建，因此单开一个事务先占地址再克隆 ——
+ * 拿不到地址就不该动旧机器，这个先后顺序是本函数存在的意义。
+ */
+export const allocateIpFromPool = async (
+  subnet: string,
+): Promise<{ readonly id: number; readonly ipAddress: string } | null> =>
+  withSession(async (db) => {
+    const allocated = await allocateIp(db, subnet);
+    await db.commit();
+    return allocated;
+  });
+
 const pickTemplate = async (
   db: DbLike,
   quota: DesktopQuota | null,

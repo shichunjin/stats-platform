@@ -15,7 +15,7 @@
  */
 import { eq } from 'drizzle-orm';
 import {
-  deskInstances, desktopTemplates, desktopVms, users,
+  deskInstances, desktopIpAllocations, desktopTemplates, desktopVms, users,
   type DeskInstanceStatus, type DesktopVmPowerState,
 } from '../../db/schema.js';
 import { withSession } from '../../db/session.js';
@@ -28,6 +28,17 @@ import type { TaskHandler } from '../worker.js';
 const readString = (source: Readonly<Record<string, unknown>> | null, key: string): string | null => {
   const value = source?.[key];
   return typeof value === 'string' && value !== '' ? value : null;
+};
+
+/** 从 requestJson 里安全取整数（jsonb 里的值可能是 string） */
+const readInt = (source: Readonly<Record<string, unknown>> | null, key: string): number | null => {
+  const value = source?.[key];
+  if (typeof value === 'number' && Number.isFinite(value)) return Math.trunc(value);
+  if (typeof value === 'string' && value.trim() !== '') {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? Math.trunc(parsed) : null;
+  }
+  return null;
 };
 
 interface InstanceRow {
@@ -118,6 +129,16 @@ export const createCreateHandler = (): TaskHandler => async (task: ClaimedTask):
       await db.db.update(deskInstances)
         .set({ currentVmId: vm!.id, status: 'provisioning', provisionStartedAt: new Date() })
         .where(eq(deskInstances.id, instance.id));
+
+      // ②' 回填 IPAM 绑定的 vm_id。
+      // 少了这一步，回收时 `WHERE vm_id = ?` 永远匹配不到，IP 一旦分配就再也不回池 ——
+      // 单台看不出来，靠 reaper 反复创建/销毁才会暴露成「池子被吃光」。
+      const ipAllocationId = readInt(task.requestJson, 'ipAllocationId');
+      if (ipAllocationId !== null) {
+        await db.db.update(desktopIpAllocations)
+          .set({ vmId: vm!.id, state: 'allocated' })
+          .where(eq(desktopIpAllocations.id, ipAllocationId));
+      }
 
       await db.commit();
       return vm!.id;

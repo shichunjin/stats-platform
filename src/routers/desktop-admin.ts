@@ -7,6 +7,7 @@
  *   GET  /admin/desktop-tasks                任务队列（排查卡单的第一入口）
  *   POST /admin/desktops/:instance_id/suspend  强制挂起
  *   POST /admin/desktops/:instance_id/recycle  强制回收（销毁 VM，保留实例行）
+ *   POST /admin/desktops/:instance_id/rebuild  从模板重建（规格按当前配额重算）
  *   POST /admin/desktops/:instance_id/probe    立即探活
  *   POST /admin/desktop-tasks/:task_id/retry   重跑失败任务
  *   GET  /admin/desktop-templates            模板列表（只读：模板在 Proxmox 侧建，这里只是登记）
@@ -100,13 +101,16 @@ const SUSPENDABLE: readonly DeskInstanceStatus[] = [
   'ready', 'connected', 'idle', 'awaiting_account',
 ];
 
-/** 可回收：除终态（destroyed/error）外的全部状态 —— 卡在 provisioning 的僵尸实例也该能清掉 */
+/**
+ * 可回收：除终态（destroyed/error）外的全部状态 —— 卡在 provisioning 的僵尸实例也该能清掉。
+ * rebuild 复用同一份清单：它比回收多一步克隆，多的那一步由任务自己校验（模板可用性 / 配额开关）。
+ */
 const RECYCLABLE: readonly DeskInstanceStatus[] = [
   'new', 'provisioning', 'configuring', 'booting', 'probing',
   'ready', 'awaiting_account', 'connected', 'idle', 'suspended', 'failed',
 ];
 
-type ActionKind = 'suspend' | 'recycle' | 'probe';
+type ActionKind = 'suspend' | 'recycle' | 'rebuild' | 'probe';
 
 /** 分钟级时间戳：同一次点击重复提交会被 task_key 幂等掉，但隔一分钟可以再来一次 */
 const minuteKey = (): number => Math.floor(Date.now() / 60_000);
@@ -125,6 +129,7 @@ const assertInstanceStatus = (
 const ACTION_LABEL: Readonly<Record<ActionKind, string>> = {
   suspend: '挂起',
   recycle: '回收（销毁 VM）',
+  rebuild: '重建（销毁后重新克隆）',
   probe: '探活',
 };
 
@@ -241,6 +246,20 @@ export const desktopAdminRoutes: FastifyPluginAsync = async (app) => {
 
     assertInstanceStatus(instance.status, action);
 
+    // 重建是唯一「先销毁再克隆」的动作：配置层能拦的就在这里拦掉，
+    // 免得运维看到「已受理」之后再等一条注定失败的任务。
+    if (action === 'rebuild' && instance.quotaId !== null) {
+      const { quotaId } = instance;
+      const allowRebuild = await app.withDb(async (db) => {
+        const [row] = await db.db.select({ allowRebuild: desktopQuotas.allowRebuild })
+          .from(desktopQuotas).where(eq(desktopQuotas.id, quotaId)).limit(1);
+        return row?.allowRebuild ?? true;
+      });
+      if (!allowRebuild) {
+        throw new HttpError(422, '该用户所属配额已禁止重建（allow_rebuild=false）');
+      }
+    }
+
     // 探活复用 worker 自己的幂等键格式（probe:instance:<id>:<minute>），
     // 与自动探测天然去重：同一分钟内点两次只会有一个 probe 任务。
     const taskKey = action === 'probe'
@@ -289,6 +308,14 @@ export const desktopAdminRoutes: FastifyPluginAsync = async (app) => {
     }),
     preHandler: [authenticate, requireAdmin],
   }, async (request) => handleAction(request, 'recycle'));
+
+  app.post<{ Params: z.infer<typeof instanceParamsSchema> }>('/admin/desktops/:instance_id/rebuild', {
+    schema: asRouteSchema({
+      params: instanceParamsSchema,
+      response: { 200: desktopActionOutSchema },
+    }),
+    preHandler: [authenticate, requireAdmin],
+  }, async (request) => handleAction(request, 'rebuild'));
 
   app.post<{ Params: z.infer<typeof instanceParamsSchema> }>('/admin/desktops/:instance_id/probe', {
     schema: asRouteSchema({

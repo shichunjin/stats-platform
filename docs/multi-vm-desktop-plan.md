@@ -78,6 +78,8 @@
 |---|---|---|---|
 | **A26** | 6.4 管理侧只列了路径，没定三件事：① 灰度关闭时管理端还能不能用；② 动作是同步执行还是入队；③ `/power {action}` 的 action 枚举怎么校验 | **落地 `src/routers/desktop-admin.ts`（9 个端点）**，三条取舍：① 管理端**不看 `desktopEnabled`** —— 关开关只该挡住用户的 `/desktop/ensure`，运维仍要能收尾存量 VM，否则一关开关就留一堆孤儿机；② 动作**一律入队**并返回 `task_id`，同一分钟用 `task_key` 幂等（`admin:<action>:instance:<id>:<minute>`），连点不会堆任务；③ `/power {action}` **拆成 `/suspend`、`/recycle`、`/probe` 三个端点** —— 一个字段要同时表达「挂起/回收/探活/开机」，校验分支比端点还多，且语义混杂（回收会销毁 VM，探活不产生状态迁移）。**未做**：`rebuild`（缺任务类型，需先定「保留数据盘」的重放顺序）、`prewarm`（懒创建够用）、`metrics`、模板写入 | 6.4、附录 A |
 | **A27** | 列表页要显示「最近一条任务」，最直接的写法是每行一个相关子查询 | 改为**一次 `IN (...)` 查询 + 内存折叠**（按 id 倒序取每实例第一条）：列表上限 200 行，N+1 会把管理页从十几毫秒拖到秒级。另：`desktop_quotas.max_daily_hours` 是 `numeric`，drizzle 0.33 读出来是 **string**，出向 schema 声明 `number`，必须在 mapper 里 `Number()` 收敛 —— 否则 fast-json-stringify 抛 TypeError，整个 `/admin/desktop-quotas` 500 | 6.4、附录 C |
+| **A28** | 第 6 章写 `rebuild` 是「从模板重建（**保留用户数据盘**）」，与 3.2「数据留中心文件服务器、VM 无状态」矛盾 | **明确 rebuild 不保留任何本地数据**：数据在文件服务器，VM 只是算力。因此 rebuild = 销毁 + 重新克隆，顺序固定为**先销毁再克隆**（同节点资源未必容得下两台，先 clone 在资源紧张时直接失败）。三个落地约束：① 销毁序列抽成 `src/desktop/vm-teardown.ts`，与 `recycle` 共用（顺序错一步的后果都在运维现场）；② rebuild 期间实例钉在 `provisioning`，**绝不复用 `destroyed`** —— `destroyed` 不在活跃唯一索引里，重建失败会产生第二条实例行、丢光 rebuild_count 与审计归属；③ 新 VM 必须清空 `account_synced_at` / `password_version`，否则停在假的 `ready`（A16 在重建场景的复现），清空后 `isAccountStale()` 为 true，用户下次登录自动补建账号 | 3.2、6.4、9.7 |
+| **A29** | `desktop_ip_allocations.vm_id` 从没被写过，而回收时按 `WHERE vm_id = ?` 释放 —— 条件永不成立 | **这是一条真实的 IPAM 泄漏**：IP 一旦分配就再也不回池，单台看不出来，靠 reaper 反复创建/销毁才会暴露成「池子被吃光」。修复两处：① `create` / `rebuild` 落 `desktop_vms` 后**回填 `vm_id`**；② 释放改**双条件**（`vm_id = ?` 或 `ip_address = primary_ip`），兜住历史数据与手工配址。重建场景对此格外敏感 —— 必须先释放旧地址再向 IPAM 要新的（顺序反过来会在池子只剩一个地址时把自己锁死） | 7.9、9.7 |
 
 ### 未变的部分
 
@@ -847,7 +849,7 @@ Windows 模板必须预装 **QEMU Guest Agent**（virtio-win ISO 自带）+ **Op
 |---|---|---|
 | 创建时 | **可配** | `clone → config(cores,memory) → start`，见上。成本仅一次毫秒级 API 调用 |
 | 运行中热调整 | **不做** | 内存热添加在 Windows 上基本不可用（virtio-balloon 只能让 guest **归还**内存，不能实时增）；CPU hotplug 需 guest 配合且 Windows Server 上表现不稳。统计软件跑到一半改硬件配置，崩溃风险远大于收益 |
-| 事后变更 | **走 rebuild** | `POST /admin/desktops/{id}/rebuild` 重新克隆并重放配置/账号，`spec_*` 重算后生效。磁盘不在变更范围（只能扩不能缩，且 guest 内扩分区是常见工单来源） |
+| 事后变更 | **走 rebuild** | `POST /admin/desktops/{id}/rebuild` 销毁后重新克隆，`spec_*` 按当前配额重算（A12）。**不做任何本地数据保留** —— 数据在文件服务器，VM 无状态（A28）；`account_synced_at` 会被清空，用户下次登录自动补建账号。磁盘不在变更范围（只能扩不能缩，且 guest 内扩分区是常见工单来源） |
 
 ### 6.4 核心接口定义
 
@@ -872,7 +874,7 @@ Windows 模板必须预装 **QEMU Guest Agent**（virtio-win ISO 自带）+ **Op
 | POST | `/admin/desktops/{id}/power` | `{action: 'start'\|'stop'\|'suspend'\|'reset'}` | 🔁 **拆成 `/suspend`（A26）** |
 | POST | `/admin/desktops/{id}/recycle` | 回收：销毁 VM、保留实例行 | ✅（无 body，快照策略走 `DESKTOP_RECYCLE_SNAPSHOT`） |
 | POST | `/admin/desktops/{id}/probe` | 立即探活（复用自动探测的幂等键，同分钟去重） | ✅ |
-| POST | `/admin/desktops/{id}/rebuild` | 从模板重建（保留用户数据盘） | ⬜ 需 `rebuild` 任务类型，见 A26 |
+| POST | `/admin/desktops/{id}/rebuild` | 从模板重建（**不保留本地数据**，见 A28；规格按当前配额重算） | ✅ 配额 `allow_rebuild=false` 时入队前即 422 |
 | POST | `/admin/desktops/prewarm` | `{count: N, template_id}` 预建池 | ⬜ 懒创建够用；预建池等到「首连 90s 不可接受」再上 |
 | GET | `/admin/desktop-templates` / POST / PUT / DELETE | 模板 CRUD（含 `status` 上下线） | 🔸 只读已落地；写入等模板维护流程定稿 |
 | POST | `/admin/desktop-templates/{id}/sync` | 把 `software-registry.json` 与脚本同步到模板 | ⬜ 现阶段由 `prepare-desktop-template.ps1` 手工跑（A24） |
