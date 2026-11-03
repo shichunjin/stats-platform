@@ -50,6 +50,8 @@ node_modules/
 .vitest-cache/
 # npm 缓存目录（本地安装时由 npm_config_cache 生成，不入库）
 .npm-cache/
+# 沙箱里的临时工作目录（npm_config_cache 相对路径、临时脚本等）
+.tmp/
 
 # 前端
 frontend/node_modules/
