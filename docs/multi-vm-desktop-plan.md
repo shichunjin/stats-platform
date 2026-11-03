@@ -526,7 +526,12 @@ commit tx (业务库):
 ### 3.9 哪些部分建议新增
 
 - DMS 服务与其 `desktop_*` 表、任务队列、worker。
-- **Provider 抽象层**（`DesktopProvider` 接口 + Proxmox 实现 + 后续 ECS 实现）。
+- **Provider 抽象层**（`DesktopProvider` 接口 + Proxmox 实现 + **阿里云 ECS 实现**，`src/desktop/provider/`）。
+  ECS 实现要点：零依赖 ACS3-HMAC-SHA256 签名；`clone` = `RunInstances`（创建即定规格，
+  静态 IP 走 `PrivateIpAddress`）；ECS 无挂起 → `suspend` 映射节省停机
+  （`StoppedMode=StopCharging`，账号未开启时配置 `ALIYUN_STOP_CHARGING=false` 走普通停机）；
+  `inspect` 的 `agentReady` 恒 true（Guest 可用性由 3389 探活任务负责）；
+  切换用 `DESKTOP_PROVIDER=proxmox|ecs`。
 - **IPAM**（内网 IP 池分配/回收，或用 DHCP 保留 + Agent 回读）。
 - **健康检查/自愈**：定时对 `ready` 实例做 TCP 3389 探测，连续失败 N 次自动重启/重建。
 - **审计回流作业**：定时把 `guacamole_connection_history` 关联合并到业务侧 `sessions`，补上 `session_end` 与时长。

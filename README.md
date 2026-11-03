@@ -185,7 +185,7 @@ npm run db:migrate-sqlite -- --sqlite ./stats_platform.db --pg-url "postgres://.
 | POST | `/admin/desktops/{id}/probe` | 立即探活（与自动探测同分钟去重） | 管理员 |
 | POST | `/admin/desktops/{id}/rebuild` | 从模板重建（销毁后重克隆，规格按当前配额重算，账号需重新登录补建） | 管理员 |
 | POST | `/admin/desktop-tasks/{id}/retry` | 重跑 **failed** 任务（attempts 归零） | 管理员 |
-| GET | `/admin/desktop-templates` | 桌面模板列表（只读，模板本身在 Proxmox 侧建） | 管理员 |
+| GET | `/admin/desktop-templates` | 桌面模板列表（只读，模板本身在 Proxmox/ECS 侧建） | 管理员 |
 | GET/PUT | `/admin/desktop-quotas` | 配额读写（规格分档的唯一入口） | 管理员 |
 
 > 云桌面相关接口**不看灰度开关**：`desktopEnabled=false` 只挡用户的 `/desktop/ensure`，

@@ -16,6 +16,7 @@
  */
 import { getSettings } from '../../config/env.js';
 import type { DesktopTemplate } from '../../db/schema.js';
+import { aliyunConfigured, createAliyunEcsProvider, fingerprintOfEcs } from './aliyun-ecs.js';
 import type { Capacity, DesktopProvider, PowerAction, VmSpec } from './types.js';
 
 export interface ProxmoxConfig {
@@ -281,20 +282,47 @@ export const createProxmoxProvider = (
 
 let cached: { fingerprint: string; provider: DesktopProvider } | null = null;
 
-const fingerprintOf = (settings: ReturnType<typeof getSettings>): string => [
-  settings.proxmoxApiUrl, settings.proxmoxTokenId, settings.proxmoxNode,
-  settings.proxmoxStorage, settings.proxmoxBridge, String(settings.proxmoxTimeoutMs),
-].join('|');
+const fingerprintOf = (settings: ReturnType<typeof getSettings>): string => {
+  // ECS 分派：指纹覆盖全部 aliyun 配置，任一变更都会重建 provider
+  if (settings.desktopProvider === 'ecs') return fingerprintOfEcs(settings);
+  return [
+    settings.proxmoxApiUrl, settings.proxmoxTokenId, settings.proxmoxNode,
+    settings.proxmoxStorage, settings.proxmoxBridge, String(settings.proxmoxTimeoutMs),
+  ].join('|');
+};
 
 /**
- * 按 settings 取 Provider；未配置（缺 apiUrl/token）时返回 null —— 调用方据此
+ * 按 settings 取 Provider；未配置（缺凭证/端点）时返回 null —— 调用方据此
  * 决定「拒绝服务」还是「走老 RDS 路径」，不要在这里抛错（会阻断整个平台启动）。
+ * desktopProvider=ecs 时校验 aliyun* 五个必填项（fail-fast，缺一返回 null）。
  */
 export const getDesktopProvider = (
   settings: ReturnType<typeof getSettings> = getSettings(),
 ): DesktopProvider | null => {
-  // 注入的替身优先：测试里没有真 Proxmox，若不优先就会拿到 null 而误判「未配置」
+  // 注入的替身优先：测试里没有真 Proxmox/ECS，若不优先就会拿到 null 而误判「未配置」
   if (cached !== null && cached.fingerprint.startsWith('<injected:')) return cached.provider;
+
+  if (settings.desktopProvider === 'ecs') {
+    if (!aliyunConfigured(settings)) return null;
+
+    const fingerprint = fingerprintOf(settings);
+    if (cached?.fingerprint === fingerprint) return cached.provider;
+
+    const provider = createAliyunEcsProvider({
+      accessKeyId: settings.aliyunAccessKeyId,
+      accessKeySecret: settings.aliyunAccessKeySecret,
+      regionId: settings.aliyunRegionId,
+      vswitchId: settings.aliyunVswitchId,
+      securityGroupId: settings.aliyunSecurityGroupId,
+      instanceType: settings.aliyunInstanceType,
+      ...(settings.aliyunInitialPassword === '' ? {} : { initialPassword: settings.aliyunInitialPassword }),
+      ...(settings.aliyunSystemDiskCategory === '' ? {} : { systemDiskCategory: settings.aliyunSystemDiskCategory }),
+      stopCharging: settings.aliyunStopCharging,
+      timeoutMs: settings.aliyunTimeoutMs,
+    });
+    cached = { fingerprint, provider };
+    return provider;
+  }
 
   if (settings.proxmoxApiUrl === '' || settings.proxmoxTokenId === '') return null;
 

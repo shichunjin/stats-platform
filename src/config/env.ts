@@ -295,6 +295,32 @@ export const settingsSchema = z.object({
   /** C7：默认 false（生产须用有效证书）；自签环境才开 */
   proxmoxInsecureTls: boolFromEnv(false),
   proxmoxTimeoutMs: intFromEnv(15_000),
+
+  /**
+   * Provider 选型：'proxmox'（自建 PVE 集群）| 'ecs'（阿里云按量实例）。
+   * 决定 getDesktopProvider 返回哪个实现；模板行的 provider 字段必须与之匹配，
+   * 否则 validateTemplate/clone 会按错误的语义解释 provider_ref。
+   */
+  desktopProvider: z.enum(['proxmox', 'ecs']).default('proxmox'),
+
+  /* ---- 阿里云 ECS Provider（desktopProvider=ecs 时必填）---- */
+  /** RAM 子账号 AccessKey（只授 ECS 读写权限；主账号 AK 严禁使用） */
+  aliyunAccessKeyId: z.string().default(''),
+  aliyunAccessKeySecret: z.string().default(''),
+  /** 'cn-hangzhou' / 'cn-beijing' … */
+  aliyunRegionId: z.string().default(''),
+  /** 实例所在交换机（决定子网与私网 IP 池，guacd 经 VPC 内网访问 3389） */
+  aliyunVswitchId: z.string().default(''),
+  aliyunSecurityGroupId: z.string().default(''),
+  /** 按量实例规格（ecs.g6.xlarge 等）；vcpu/memoryMb 由 DMS 侧配额决定此字段 */
+  aliyunInstanceType: z.string().default(''),
+  /** 创建实例的初始密码：VM 首次启动后由改密链路（notifyVmPasswordChange）立即改掉 */
+  aliyunInitialPassword: z.string().default(''),
+  /** 系统盘类别 cloud_essd / cloud_efficiency …，空 = 默认 */
+  aliyunSystemDiskCategory: z.string().default(''),
+  /** 空闲挂起映射为节省停机模式（StopInstance StoppedMode=StopCharging）；账号未开启时改走普通停机 */
+  aliyunStopCharging: boolFromEnv(false),
+  aliyunTimeoutMs: intFromEnv(15_000),
 });
 
 export type Settings = z.infer<typeof settingsSchema>;
