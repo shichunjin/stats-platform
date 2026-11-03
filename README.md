@@ -44,6 +44,8 @@ stats-platform/
 ├── powershell/                 # Windows 脚本
 │   ├── setup-rdsh.ps1          # RDS 会话主机部署脚本（装角色/配许可/建本地用户，无域环境）
 │   ├── login.ps1               # 用户登录脚本（映射 Z:/W: 盘、环境变量、按注册表建快捷方式、落点强制）
+│   ├── lib/stats-config.ps1    # 共享根（文件服务器）解析与固化，供下面各脚本共用
+│   ├── prepare-desktop-template.ps1 # 桌面模板固化（多 VM 形态：共享根/脚本/RDP/防火墙/清单）
 │   ├── software-registry.json  # 桌面软件注册表（桌面快捷方式清单，运维手工维护并部署）
 │   ├── enforce-output-location.ps1 # 机器级落点强制（通用对话框位置栏，新装软件后重跑）
 │   └── configure-rds.ps1       # RDS 安全配置（禁用剪贴板/驱动器/打印）
@@ -305,6 +307,9 @@ Restart-Service -Name TermService -Force
 $scriptsDir = "C:\stats-scripts"
 New-Item -ItemType Directory -Path $scriptsDir -Force | Out-Null
 Copy-Item .\powershell\login.ps1 "$scriptsDir\login.ps1" -Force
+# lib\ 必须一起复制：login.ps1 靠它解析共享根，缺了会降级到 \\127.0.0.1 并告警
+New-Item -ItemType Directory -Path "$scriptsDir\lib" -Force | Out-Null
+Copy-Item .\powershell\lib\*.ps1 "$scriptsDir\lib\" -Force
 # 登录脚本同目录需放置软件注册表（运维手工维护，JSON 数组，UTF-8 无 BOM）
 Copy-Item .\powershell\software-registry.json "$scriptsDir\software-registry.json" -Force
 # 普通用户只读、不可篡改脚本；SYSTEM/Administrators 完全控制
@@ -315,14 +320,23 @@ $wrapper = Join-Path $startup "run-login.cmd"
 "@echo off`r`npowershell -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$scriptsDir\login.ps1`"" |
     Set-Content $wrapper -Encoding ASCII
 
-# 多机部署（独立文件服务器）时，才改用共享路径（注册表同目录一并复制）：
-# Copy-Item .\powershell\login.ps1 \\fileserver\scripts\login.ps1
-# Copy-Item .\powershell\software-registry.json \\fileserver\scripts\software-registry.json
+# 多机 / 多 VM 部署（桌面与文件服务器分离）：
+#   共享根不再是 127.0.0.1，用模板固化脚本一次搞定（注册表 + 机器级环境变量 + 脚本部署 + RDP/防火墙）：
+#   .\powershell\prepare-desktop-template.ps1 -FileServer fileserver -GuacdSource <guacd 出网 IP>
+#   克隆出来的每台 VM 都继承同一份配置，不必逐台改。
+#   也可在任意机器上单独改共享根（管理员）：
+#   . .\powershell\lib\stats-config.ps1; Set-StatsFileServer -FileServer fileserver -MachineEnvironment
 ```
 
-> 登录脚本 / 注册表更新流程（本次 login.ps1 或 software-registry.json 修改后必做）：在仓库目录 `git pull`
-> 后重新执行上面第 ④ 步的 `Copy-Item ... C:\stats-scripts\login.ps1`（若改了注册表，同时复制
-> `software-registry.json`），已登录用户**注销重新登录**一次生效。
+> **共享根（`\\<fileserver>`）怎么定**：`login.ps1` 等脚本不再硬编码 `\\127.0.0.1`，
+> 统一按 `-FileServer` 参数 → 环境变量 `STATS_FILE_SERVER` → 注册表
+> `HKLM\SOFTWARE\StatsPlatform\FileServer` → 默认 `\\127.0.0.1` 的顺序解析（唯一实现在
+> `powershell/lib/stats-config.ps1`）。**单机 RDS 形态不写任何配置，行为与改造前完全一致**；
+> 多 VM 形态由 `prepare-desktop-template.ps1` 在模板里写死一层，克隆即继承。
+
+> 登录脚本 / 注册表更新流程（本次 `login.ps1`、`lib/*.ps1` 或 `software-registry.json` 修改后必做）：在仓库目录 `git pull`
+> 后重新执行上面第 ④ 步的 `Copy-Item ... C:\stats-scripts\login.ps1`（**`lib\` 与注册表一并复制**），
+> 已登录用户**注销重新登录**一次生效。
 
 **生成物落点强制（保证各软件生成文件都在本人指定目录）：**
 
@@ -364,6 +378,37 @@ $wrapper = Join-Path $startup "run-login.cmd"
 | 登录账户 | Guacamole 登录的是服务器**本地账户**（由 `setup-rdsh.ps1` 创建），非域账户 |
 | 许可宽限期 | 未配置许可服务器时，有 120 天宽限期；生产环境需购买 RDS CAL |
 | 公网域名 | 购买的域名（如 `chunjindevelop68.xyz`）用于给 Guacamole/Web 门户做正式访问入口，与 AD 域无关 |
+
+#### 多 VM 形态：桌面模板固化（`powershell/prepare-desktop-template.ps1`）
+
+一台 Windows 主机服务所有用户的 RDS 形态，在「一人一 VM」后会碎成一堆隐式假设。本脚本把
+**模板机**上必须固化的东西一次做完，克隆出来的 VM 直接继承（对应改造方案阶段 3）：
+
+| 步骤 | 做什么 | 不做的后果 |
+|------|--------|-----------|
+| 共享根 | 写 `HKLM\SOFTWARE\StatsPlatform\FileServer` + 机器级 `STATS_FILE_SERVER` | VM 上 `\\127.0.0.1` 指向 VM 自己，W:/Z: 映射不到文件服务器 |
+| 脚本部署 | `login.ps1` / `enforce-output-location.ps1` / `configure-rds.ps1` / `software-registry.json` / `lib\` → `C:\stats-scripts`，ACL 锁成 Users 只读 | 缺 `lib\` 时登录脚本降级到 `\\127.0.0.1`（只告警不中断） |
+| RDP 参数 | 关 NLA + `SecurityLayer=1` + 禁剪贴板/驱动器/打印机重定向 + 单会话 | 每台 VM 手工调，批量运维时必错 |
+| 防火墙 | 3389 只放行 guacd 来源，22 只放行平台服务器来源（给了参数才收紧） | 桌面 VM 的 3389/22 直接暴露在网段内 |
+| OpenSSH | 装 `OpenSSH.Server` 并设开机自启 | DMS 无法在 VM 上建账号/改密码（`syncVmAccount` 全失败） |
+| Guest Agent | 检查 `qemu-guest-agent` | DMS 的 `waitAgent` 永远超时，桌面卡在 `provisioning` |
+| 版本清单 | 生成 `C:\stats-scripts\template-manifest.json`（`login_script_ver` / `software_registry_ver`） | 无法批量核对哪些 VM 还在跑旧脚本 |
+
+```powershell
+# 模板机上以管理员运行（-GuacdSource / -PlatformSource 可选，不给则不改现有防火墙规则）
+.\powershell\prepare-desktop-template.ps1 -FileServer fileserver `
+    -GuacdSource 10.0.0.21 -PlatformSource 10.0.0.5 `
+    -TemplateName win2022-stats-v1
+
+# 脚本退出码 0=全部通过，2=缺 Guest Agent，3=缺 OpenSSH；非 0 不要往下转模板
+```
+
+> **与 `.env` 的配套关系**：模板关掉 NLA（`UserAuthentication=0`）后，后端必须设
+> `GUAC_RDP_SECURITY=tls` + `GUAC_RDP_IGNORE_CERT=true`，否则 guacd 仍按 `nla` 发起协商、
+> 连接必然失败。这是方案里记为「RDP 安全配置张力」的那个点，模板脚本末尾会再提示一次。
+>
+> 模板本身**不做 sysprep、不装软件、不写静态 IP**：sysprep 会重置 SID/管理员密码/网络，
+> 必须在软件装好、脚本验证通过后由运维手工执行（脚本末尾打印命令清单）。
 
 ### 3. Guacamole（Linux 服务器 + Docker）
 

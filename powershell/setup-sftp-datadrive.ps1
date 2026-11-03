@@ -8,8 +8,13 @@
 #   2. 创建 C:\StatsData，Remote Desktop Users 只读、Administrators 完全控制
 #   3. 将 C:\StatsData 共享为 StatsData（SMB）
 #   4. 在「所有用户的启动目录」放 map-z-drive.cmd，
-#      每个用户登录后自动把 Z: 盘映射到 \\127.0.0.1\StatsData
+#      每个用户登录后自动把 Z: 盘映射到 \\<fileserver>\StatsData
 #   5. 把 Linux 端公钥写入 administrators_authorized_keys（免密 SFTP）
+#
+# 共享根 <fileserver>：
+#   本脚本在**文件服务器**上运行，默认 \\127.0.0.1（回环映射到本机共享）即正确。
+#   只有在「替别的机器生成映射脚本」时才需要 -FileServer <主机名>。
+#   解析顺序见 lib/stats-config.ps1。
 #
 # 用法（以管理员身份运行 PowerShell）：
 #
@@ -21,6 +26,9 @@
 #
 #   # 不传公钥：只配置环境，稍后手工添加（重复运行本脚本即可补加）
 #   .\setup-sftp-datadrive.ps1
+#
+#   # 生成指向中心文件服务器的 Z: 映射脚本（多 VM 形态）
+#   .\setup-sftp-datadrive.ps1 -FileServer fileserver
 #
 # 注意：
 #   - 阿里云安全组需放行本机 22 端口（TCP）
@@ -34,7 +42,10 @@ param(
     [string]$SshPublicKey,
 
     # Linux 端 SSH 公钥文件路径（如 stats_windows.pub）
-    [string]$SshPublicKeyFile
+    [string]$SshPublicKeyFile,
+
+    # 共享根（文件服务器）；留空按 lib/stats-config.ps1 的解析顺序回落
+    [string]$FileServer = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -53,9 +64,18 @@ if (-not (Test-Admin)) {
     exit 1
 }
 
+$StatsLibPath = Join-Path $PSScriptRoot 'lib\stats-config.ps1'
+if (-not (Test-Path $StatsLibPath)) {
+    Write-Error "缺少共享配置模块: $StatsLibPath（请把 lib\ 目录与脚本一起部署）"
+    exit 1
+}
+. $StatsLibPath
+$FileServer = Resolve-StatsFileServer -FileServer $FileServer
+
 Write-Host "============================================================" -ForegroundColor Cyan
 Write-Host " Windows 端：OpenSSH + C:\StatsData + Z: 盘配置" -ForegroundColor Cyan
 Write-Host "============================================================" -ForegroundColor Cyan
+Write-Host " 共享根: $(Get-StatsFileServerReport -FileServer $FileServer)" -ForegroundColor Cyan
 Write-Host ""
 
 # ============================================================
@@ -145,12 +165,13 @@ $MapScript = Join-Path $CommonStartup "map-z-drive.cmd"
 $cmdContent = @'
 @echo off
 net use Z: /delete /y >nul 2>&1
-net use Z: \\127.0.0.1\StatsData /persistent:no
+net use Z: __STATS_FILE_SERVER__\StatsData /persistent:no
 '@
+$cmdContent = $cmdContent.Replace('__STATS_FILE_SERVER__', $FileServer)
 
 Set-Content -Path $MapScript -Value $cmdContent -Encoding ASCII
 Write-Host "      登录脚本已放置: $MapScript" -ForegroundColor Green
-Write-Host "      用户登录后 Z: 盘 = \\127.0.0.1\StatsData" -ForegroundColor Green
+Write-Host "      用户登录后 Z: 盘 = $FileServer\StatsData" -ForegroundColor Green
 
 # ============================================================
 # 5. 安装 Linux 公钥到 administrators_authorized_keys

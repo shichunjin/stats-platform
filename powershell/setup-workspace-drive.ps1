@@ -9,13 +9,18 @@
 #   2. 共享为 workspace / pending（SMB），开启基于访问的枚举（ABE）：
 #      用户在共享根下看不到自己无权访问的他人目录
 #   3. 在「所有用户的启动目录」放 map-w-drive.cmd，
-#      用户登录后 W: 盘自动映射到 \\127.0.0.1\workspace\<自己的用户名>
+#      用户登录后 W: 盘自动映射到 \\<fileserver>\workspace\<自己的用户名>
 #   4. 可选：为已存在的平台用户批量开通/修复私有目录（-ProvisionUsers）
 #
 # 目录约定（与后端 src/config/env.ts、src/integrations/transfer.ts 一致）：
 #   W: 盘 -> C:\workspace\<用户名>   （获取数据 / 筛选生成的 Excel）
 #   结果暂存 -> C:\pending\<用户名>
 #   每个用户目录的 NTFS ACL：仅本人 / SYSTEM / Administrators
+#
+# 共享根 <fileserver>：
+#   本脚本在**文件服务器**上运行，默认 \\127.0.0.1（回环映射到本机共享）即正确。
+#   只有在「替别的机器生成映射脚本」时才需要 -FileServer <主机名>。
+#   解析顺序见 lib/stats-config.ps1。
 #
 # 用法（以管理员身份运行 PowerShell）：
 #
@@ -24,14 +29,27 @@
 #   # 顺便为存量用户开通并递归重置历史文件权限
 #   .\setup-workspace-drive.ps1 -ProvisionUsers user1,user2,user3 -ResetExisting
 #
+#   # 生成指向中心文件服务器的映射脚本（多 VM 形态）
+#   .\setup-workspace-drive.ps1 -FileServer fileserver
+#
 # ============================================================
 #Requires -RunAsAdministrator
 param(
     [string[]]$ProvisionUsers = @(),
-    [switch]$ResetExisting
+    [switch]$ResetExisting,
+    [string]$FileServer = ""
 )
 
 $ErrorActionPreference = "Stop"
+
+$StatsLibPath = Join-Path $PSScriptRoot 'lib\stats-config.ps1'
+if (-not (Test-Path $StatsLibPath)) {
+    throw "缺少共享配置模块: $StatsLibPath（请把 lib\ 目录与脚本一起部署）"
+}
+. $StatsLibPath
+
+$FileServer = Resolve-StatsFileServer -FileServer $FileServer
+Write-Host "共享根: $(Get-StatsFileServerReport -FileServer $FileServer)" -ForegroundColor Cyan
 
 # 语言无关：Remote Desktop Users 用 SID 解析显示名（icacls 直接支持 *SID 形式）
 $sidRdu = New-Object System.Security.Principal.SecurityIdentifier("S-1-5-32-555")
@@ -88,14 +106,17 @@ Initialize-PrivateRoot "C:\pending"   "pending"
 Write-Host "[2/3] 配置登录自动映射 W: 盘..." -ForegroundColor Yellow
 $CommonStartup = "C:\ProgramData\Microsoft\Windows\Start Menu\Programs\StartUp"
 $MapScript = Join-Path $CommonStartup "map-w-drive.cmd"
+# 单引号 here-string 不做变量展开，用占位符替换：%USERNAME% 必须原样落到 cmd 里，
+# 若改成双引号 here-string 会被 PowerShell 当成变量（且 $ 出现在 cmd 语法里更危险）。
 $cmdContent = @'
 @echo off
 net use W: /delete /y >nul 2>&1
-net use W: \\127.0.0.1\workspace\%USERNAME% /persistent:no >nul 2>&1
+net use W: __STATS_FILE_SERVER__\workspace\%USERNAME% /persistent:no >nul 2>&1
 '@
+$cmdContent = $cmdContent.Replace('__STATS_FILE_SERVER__', $FileServer)
 Set-Content -Path $MapScript -Value $cmdContent -Encoding ASCII
 Write-Host "      登录脚本已放置: $MapScript" -ForegroundColor Green
-Write-Host "      用户登录后 W: 盘 = \\127.0.0.1\workspace\<用户名>（私有）" -ForegroundColor Green
+Write-Host "      用户登录后 W: 盘 = $FileServer\workspace\<用户名>（私有）" -ForegroundColor Green
 
 Write-Host "[3/3] 开通存量用户私有目录..." -ForegroundColor Yellow
 if ($ProvisionUsers.Count -eq 0) {

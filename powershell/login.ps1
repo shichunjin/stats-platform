@@ -8,8 +8,11 @@
     registry (software-registry.json), and optionally launches a registered software.
 
     目录约定（必须与后端 src/config/env.ts 一致）：
-      W:      -> \\127.0.0.1\workspace\<用户名>   (C:\workspace\<用户名>)
-      pending -> \\127.0.0.1\pending\<用户名>     (C:\pending\<用户名>)
+      W:      -> \\<fileserver>\workspace\<用户名>   (文件服务器上的 C:\workspace\<用户名>)
+      pending -> \\<fileserver>\pending\<用户名>     (文件服务器上的 C:\pending\<用户名>)
+    <fileserver> 由 lib/stats-config.ps1 解析（入参 -FileServer → 环境变量
+    STATS_FILE_SERVER → 注册表 HKLM\SOFTWARE\StatsPlatform\FileServer → \\127.0.0.1）。
+    单机一体部署不写任何配置，仍解析为 \\127.0.0.1，行为与改造前一致。
     私有目录由后端在注册/投递数据时创建并锁定 ACL，本脚本不再在共享根下建目录
     （普通用户也无权在共享根创建目录）。
 
@@ -32,7 +35,8 @@ param(
     [int]$UserId = 0,
     [int]$DeptId = 0,
     [string]$Software = "",
-    [string]$GuacId = ""
+    [string]$GuacId = "",
+    [string]$FileServer = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -40,11 +44,42 @@ $ErrorActionPreference = "Stop"
 if (-not $Username) { $Username = $env:USERNAME }
 
 # ============================================================
+# 共享根（文件服务器）解析
+# ============================================================
+# 多 VM 形态下本脚本跑在各自的桌面 VM 上，\\127.0.0.1 会指向 VM 自己，
+# 因此共享根必须可配置（解析顺序见 lib/stats-config.ps1）。
+# 单机 RDS 形态不写任何配置 → 仍解析为 \\127.0.0.1，行为与改造前完全一致。
+#
+# 这里刻意做到「找不到 lib 也不中断登录」：登录脚本抛异常 = 用户拿到半个桌面
+# （没有快捷方式、没有位置栏），排障成本远高于降级到默认值 + 一条告警。
+$StatsLibPath = Join-Path $PSScriptRoot 'lib\stats-config.ps1'
+if (Test-Path $StatsLibPath) {
+    . $StatsLibPath
+} else {
+    Write-Warning "未找到 $StatsLibPath，改用内置简化解析（部署时请把 lib\ 目录一并复制到 C:\stats-scripts\）。"
+    function Resolve-StatsFileServer {
+        param([string]$FileServer = "")
+        if ($FileServer -and $FileServer.Trim() -ne "") {
+            return '\\' + $FileServer.Trim().TrimStart('\')
+        }
+        if ($env:STATS_FILE_SERVER -and $env:STATS_FILE_SERVER.Trim() -ne "") {
+            return '\\' + $env:STATS_FILE_SERVER.Trim().TrimStart('\')
+        }
+        try {
+            $reg = Get-ItemProperty -Path 'HKLM:\SOFTWARE\StatsPlatform' -Name 'FileServer' -ErrorAction Stop
+            if ($reg.FileServer) { return '\\' + ([string]$reg.FileServer).Trim().TrimStart('\') }
+        } catch { }
+        return '\\127.0.0.1'
+    }
+}
+
+# ============================================================
 # Path constants
 # ============================================================
-$FileServer = "\\127.0.0.1"
+$FileServer = Resolve-StatsFileServer -FileServer $FileServer
 $WorkspaceRoot = "$FileServer\workspace"
 $PendingRoot   = "$FileServer\pending"
+$StatsDataRoot = "$FileServer\StatsData"
 
 $ZDrive = "Z:"
 $WDrive = "W:"
@@ -56,8 +91,9 @@ $UserPending   = "$PendingRoot\$Username"
 # ============================================================
 # 1. Map network drives
 # ============================================================
-# Z: is mapped by the public startup script (map-z-drive.cmd -> \\127.0.0.1\StatsData,
+# Z: is mapped by the public startup script (map-z-drive.cmd -> \\<fileserver>\StatsData,
 # the shared public dataset). Do NOT touch Z: here to avoid fighting that mapping.
+# 共享根由 Resolve-StatsFileServer 统一解析，见上方「共享根解析」段。
 
 # W: -> user workspace (writable, PRIVATE per user). Backend pre-creates and
 # locks the folder; map only when it exists.
@@ -66,6 +102,12 @@ $UserPending   = "$PendingRoot\$Username"
 if (Test-Path $UserWorkspace) {
     if (Test-Path $WDrive) { net use $WDrive /delete /y | Out-Null }
     net use $WDrive $UserWorkspace /persistent:yes | Out-Null
+    # 映射失败要么共享不可达，要么本机账号密码与文件服务器不一致（方案 A′ 三端同密码）。
+    # 原实现把输出丢进 Out-Null 后不再判断，故障时用户只看到"W: 盘不见了"，
+    # 排障只能靠猜——这里补一条带上下文的告警。
+    if ($LASTEXITCODE -ne 0) {
+        Write-Warning "W: 映射失败（net use exit=$LASTEXITCODE）：$UserWorkspace；请确认文件服务器可达、本机账号密码与文件服务器一致。"
+    }
     # net use 返回即驱动器可用，但同进程 Test-Path 偶发拿不到状态；强制刷新并重试
     if (-not (Test-Path $WDrive)) {
         $ShellProbe = New-Object -ComObject Shell.Application
@@ -286,7 +328,7 @@ if (-not $IsAdmin) {
 
 Write-Host "========================================"
 Write-Host "User $Username login environment initialized"
-Write-Host "  Z: (public dataset, read-only) = \\127.0.0.1\StatsData
+Write-Host "  Z: (public dataset, read-only) = $StatsDataRoot
   W: (workspace, private)        = $UserWorkspace"
 Write-Host "  Result output directory        = $UserPending"
 Write-Host "========================================"

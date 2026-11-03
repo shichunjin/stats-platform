@@ -64,6 +64,14 @@
 | **A21** | `desk_instances.*` 是 `timestamp without time zone`，drizzle 写库用 UTC 墙钟、读库按本地时区解析（本机 +08 实测偏移 8 小时） | 空闲天数**一律在 SQL 里算**（`EXTRACT(EPOCH FROM ((now() AT TIME ZONE 'UTC') - COALESCE(...)))`），不让 8 小时误差进入「7 天」这种边界判断；TS 只处理算好的浮点天数 | 9.5 |
 | **A22** | 9.5 的「挂起」没说具体幂等键与自愈边界 | `suspend` / `recycle` 入队键按天（`suspend:instance:<id>:<yyyymmdd>`），重复扫描不重复入队；探活连续失败只做 **reset**，不做重建（重建要重装账号、重指连接，代价远高于自愈收益） | 9.5、9.8、9.10 |
 
+### v2.4 增补（2026-11-03 阶段 3 落地时：四个脚本的共享根）
+
+| # | 缺口 | 处理 | 影响面 |
+|---|---|---|---|
+| **A23** | 3.8 / 附录 A.3 只写了「4 处硬编码必须一起改」——这是**靠人记性**的方案，而漏一个的症状（W: 有、Z: 没有）不会立刻暴露 | 收敛为**单一实现 + 三层解析**：新增 `powershell/lib/stats-config.ps1`（`Resolve-StatsFileServer` / `Set-StatsFileServer` / `ConvertTo-StatsFileServerUnc`），4 个脚本各自只加 `-FileServer` 参数并调函数，不再各存一份常量。解析顺序：**入参 → 环境变量 `STATS_FILE_SERVER` → 注册表 `HKLM\SOFTWARE\StatsPlatform\FileServer` → `\\127.0.0.1`**。三层都要的原因：参数给临时排查、环境变量/注册表给模板固化（克隆即继承，不必逐台改文件）、默认值保证**单机 RDS 形态不写任何配置也行为不变** | 3.8、附录 A.3 |
+| **A24** | 阶段 3「模板制作」在 10 章里只是一行文字，没有可执行口径，错了要等用户登录才发现 | 落成 `powershell/prepare-desktop-template.ps1`：共享根固化 → 脚本部署（**必须含 `lib\`**，否则登录脚本降级到 `\\127.0.0.1`）→ RDP 参数（关 NLA/`SecurityLayer=1`/禁重定向）→ 防火墙收敛（3389 只放行 guacd、22 只放行平台，**给了参数才动**，避免把运维自己挡在门外）→ OpenSSH → Guest Agent 检查 → `C:\stats-scripts\template-manifest.json`。清单里的 `login_script_ver` / `software_registry_ver` 直接对应 `desktop_templates` 的两列，用于批量核对存量 VM。退出码分级（0/2/3），非 0 不该转模板 | 10（阶段 3） |
+| **A25** | A5/A7 只说「模板里关 NLA」，没写反向约束 | **关 NLA ⇒ `.env` 必须 `GUAC_RDP_SECURITY=tls`**（配 `GUAC_RDP_IGNORE_CERT=true`）。这是方案 2.10 记的「RDP 安全配置张力」的收敛点：目标机的 NLA 状态在运行时不可知，**配置层不做自动推断**，改为在 `.env.example` 与模板脚本里显式提示 + 构建时告警 | 9.3、附录 C |
+
 ### 未变的部分
 
 第 3 章架构、第 4 章选型（仍推荐 Proxmox VE）、第 5 章状态机与异常矩阵、
@@ -1429,7 +1437,7 @@ if (mode === 'rds') {
 |---|---|---|---|
 | **1. 项目阅读与确认** | 对齐现状、补齐缺失信息 | 本文档 + Q1~Q10 确认结果 | Q1/Q2/Q3（规模、软件授权、Windows 授权）有明确答案 **✅ 2026-11-02 已达成（Q1~Q10 按默认值确认，见第 1 章）** |
 | **2. 架构评审** | 定稿架构与选型 | 评审通过的架构图、选型结论、成本估算 | 决策人签字；授权成本已核算 |
-| **3. 模板制作** | 做出可克隆的黄金镜像 | Windows Server 2022 模板 VM：装统计软件、`login.ps1` + `software-registry.json`、OpenSSH、QEMU Guest Agent、关 NLA + `SecurityLayer=1`、防火墙规则、`software-registry` 版本登记 | 手动克隆 1 台 → 开机 → RDP 可连 → W:/Z:/pending 正确 → 软件可启动 → 关机转模板成功 |
+| **3. 模板制作** | 做出可克隆的黄金镜像 | Windows Server 2022 模板 VM：装统计软件、`login.ps1` + `software-registry.json`、OpenSSH、QEMU Guest Agent、关 NLA + `SecurityLayer=1`、防火墙规则、`software-registry` 版本登记 —— **其中除「装软件/sysprep」外已脚本化为 `powershell/prepare-desktop-template.ps1`（A24）** | 手动克隆 1 台 → 开机 → RDP 可连 → W:/Z:/pending 正确 → 软件可启动 → 关机转模板成功 |
 | **4. 虚拟化平台接入** | Provider 打通 | Proxmox 集群（或 ECS 可用区）、API token、网段/VLAN、IPAM、与 Linux 服务器的隧道 | 脚本能完成「克隆→开机→取 IP→探 3389→销毁」全流程，耗时 <90s |
 | **5. DMS 开发（核心）** | 生命周期 + 绑定 + 注册 | `desktop_*` 表（7 张）+ `DesktopProvider` + 任务队列 + worker + 基础 API | 单用户能完成 5.2 的全流程；所有步骤幂等；失败有明确错误码 |
 | **6. Guacamole 连接自动注册** | 改造 `src/integrations/guac.ts::buildRdpParameters` | `hostname/port` 参数化；新增 `updateConnectionTarget()` / `revokeConnectionRead()`；`guac_connection_map` 写入；`params_hash` 免重复同步 | 同一用户换 VM 后，下次 connect 自动指向新 IP；回滚写回 `rdsHost` 验证通过；**改密后 `guacamole_user` 密码未被连接参数覆盖** |
@@ -1476,6 +1484,8 @@ if (mode === 'rds') {
 | `src/desktop/service/recycle.ts` | 空闲挂起 / 销毁 + 快照 + 释放 IP + `revokeConnectionRead` |
 | `src/desktop/service/reconcile.ts` | 对账：Provider 实际 VM ↔ `desktop_vms` 差异修正 |
 | `src/desktop/worker.ts` | `setInterval` + `FOR UPDATE SKIP LOCKED` 消费 `desktop_tasks`；启动时重置 stale `running` |
+| `powershell/lib/stats-config.ps1` | 共享根（文件服务器）单一实现：`Resolve-StatsFileServer` / `Set-StatsFileServer` / UNC 规整；被 4 个 Windows 脚本 dot-source（A23） |
+| `powershell/prepare-desktop-template.ps1` | 模板固化：共享根 + 脚本部署 + RDP 参数 + 防火墙 + OpenSSH + Guest Agent 检查 + `template-manifest.json`（A24） |
 | `src/db/schema.desktop.ts` | 7 张表的 Drizzle 定义（也可直接并入 `schema.ts`，二选一，不要两处都写） |
 | `frontend/src/views/admin/DesktopManage.vue` | 实例/模板/配额/任务四个 Tab |
 | `tests/ts/desktop-*.test.ts` | 见 A.4 |
@@ -1492,6 +1502,12 @@ if (mode === 'rds') {
 > 注意：`README.md` 第 318 行已经写了「多机部署时改用共享路径」，说明设计意图早就预留了；
 > 但**脚本内部**的默认值还没跟上 —— 改的时候四个文件要一起改，漏一个就会出现「W: 有、Z: 没有」这类半残状态。
 > 另外 `GUAC_*`/`PS_LOGIN_SCRIPT` 里已有 `psLoginScript` 默认指向 `\\fileserver\scripts\login.ps1`，可作为统一入口。
+>
+> **已落地（A23，2026-11-03）**：上表 4 处硬编码已全部改为调 `powershell/lib/stats-config.ps1`
+> 的 `Resolve-StatsFileServer`，各脚本新增 `-FileServer` 参数；默认值仍是 `\\127.0.0.1`，
+> 单机 RDS 形态行为不变。解析顺序见该文件头注释（入参 → `STATS_FILE_SERVER` → 注册表 → 默认）。
+> 注意 `login.ps1` 在**找不到 `lib\`** 时刻意降级到内置简化解析 + 告警，而不是抛异常：
+> 登录脚本一旦中断，用户拿到的是没有快捷方式/没有位置栏的"半个桌面"，排障成本远高于降级。
 
 ### A.4 测试（vitest + PGlite，必须保持现有 372 用例全绿）
 

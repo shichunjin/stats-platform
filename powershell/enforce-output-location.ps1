@@ -5,9 +5,11 @@
 .DESCRIPTION
     本脚本与 login.ps1 配合，构成"软件生成文件输出到各自指定目录"的强制保障。
     目录约定（与 src/config/env.ts、setup-workspace-drive.ps1 一致）：
-      W: = \\127.0.0.1\workspace\<用户名>   工作/输出，NTFS 仅本人可写
-      待导出目录 = \\127.0.0.1\pending\<用户名>（登录脚本建桌面快捷方式，不映射盘符）
-      Z: = \\127.0.0.1\StatsData             原始数据，只读
+      W: = \\<fileserver>\workspace\<用户名>   工作/输出，NTFS 仅本人可写
+      待导出目录 = \\<fileserver>\pending\<用户名>（登录脚本建桌面快捷方式，不映射盘符）
+      Z: = \\<fileserver>\StatsData             原始数据，只读
+    <fileserver> 由 lib/stats-config.ps1 解析，本脚本只用于输出核对信息——
+    位置栏写的是盘符（W:\ / Z:\），不含 UNC，真正的共享根由各机器上的盘符映射决定。
 
     本脚本（机器级，对所有后续安装的软件同样生效）：
       1. 通用"另存为/打开"对话框位置栏（PlacesBar）锁定为 W: / Z: / 待导出目录，
@@ -34,17 +36,25 @@
 #>
 #Requires -RunAsAdministrator
 param(
-    [switch]$HardenRootAcl
+    [switch]$HardenRootAcl,
+    [string]$FileServer = ""
 )
 
 $ErrorActionPreference = "Stop"
+
+$StatsLibPath = Join-Path $PSScriptRoot 'lib\stats-config.ps1'
+if (-not (Test-Path $StatsLibPath)) {
+    throw "缺少共享配置模块: $StatsLibPath（请把 lib\ 目录与脚本一起部署）"
+}
+. $StatsLibPath
+$FileServer = Resolve-StatsFileServer -FileServer $FileServer
 
 # ============================================================
 # 1. 通用文件对话框位置栏（PlacesBar）—— 对所有软件生效
 # ============================================================
 # 旧式打开/另存为对话框左侧栏只显示：我的工作区(W:)、原始数据(Z:)。
 # 待导出目录是按用户名的 UNC 路径，无法在机器级策略里写死，
-# 由 login.ps1 在每用户 HKCU 策略中追加 \\127.0.0.1\pending\<用户名>。
+# 由 login.ps1 在每用户 HKCU 策略中追加 \\<fileserver>\pending\<用户名>。
 Write-Host "[1/2] 锁定机器级通用文件对话框位置栏（W: / Z:）..." -ForegroundColor Yellow
 $placesHklm = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\ComDlg32\PlacesBar"
 New-Item -Path $placesHklm -Force | Out-Null
@@ -69,6 +79,7 @@ if ($HardenRootAcl) {
 
 Write-Host ""
 Write-Host "完成。生效说明：" -ForegroundColor Cyan
+Write-Host "  共享根: $FileServer（待导出目录 = $FileServer\pending\<用户名>）" -ForegroundColor Cyan
 Write-Host "  - 机器级配置对新安装的软件同样适用（标准文件对话框位置栏）。" -ForegroundColor Cyan
 Write-Host "  - 每用户措施（桌面/文档/下载 -> W:、隐藏 C: 盘）随下次登录由 login.ps1 下发。" -ForegroundColor Cyan
 Write-Host "  - 新接入软件只需：安装后在 software-registry.json 增加一条（key/name/path/args），" -ForegroundColor Cyan
