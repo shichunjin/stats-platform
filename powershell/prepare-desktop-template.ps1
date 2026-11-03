@@ -151,19 +151,37 @@ Write-Host "      ACL 已锁定（Users 只读，SYSTEM/Administrators 完全控
 # ============================================================
 Write-Step "[3/7] RDP 参数（关 NLA + SecurityLayer=1 + 剪贴板启用 + 禁驱动器/打印机重定向）"
 
-$TsPolicy = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows NT\Terminal Services'
+$TsPolicy   = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows NT\Terminal Services'
+$TsListener = 'HKLM:\SYSTEM\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp'
 if (-not (Test-Path $TsPolicy)) {
     New-Item -Path $TsPolicy -Force | Out-Null
 }
+# listener 级：TermService 直接读这里的值（写进 Policies 不生效）
+Set-ItemProperty -Path $TsListener -Name 'UserAuthentication'  -Value 0 -Type DWord -Force
+Set-ItemProperty -Path $TsListener -Name 'SecurityLayer'       -Value 1 -Type DWord -Force
+Set-ItemProperty -Path $TsListener -Name 'fSingleSessionPerUser' -Value 1 -Type DWord -Force
+Set-ItemProperty -Path $TsListener -Name 'fDisableClip'        -Value 0 -Type DWord -Force
+Set-ItemProperty -Path $TsListener -Name 'fDisableCdm'         -Value 1 -Type DWord -Force
+Set-ItemProperty -Path $TsListener -Name 'fDisablePnp'         -Value 1 -Type DWord -Force
+# 策略级：远程连接开关 + 重定向策略（GPO 名称映射，优先级高于 listener）
 Set-ItemProperty -Path $TsPolicy -Name 'fDenyTSConnections'  -Value 0 -Type DWord -Force
-Set-ItemProperty -Path $TsPolicy -Name 'UserAuthentication'  -Value 0 -Type DWord -Force
-Set-ItemProperty -Path $TsPolicy -Name 'SecurityLayer'       -Value 1 -Type DWord -Force
 Set-ItemProperty -Path $TsPolicy -Name 'fDisableClip'        -Value 0 -Type DWord -Force
 Set-ItemProperty -Path $TsPolicy -Name 'fDisableCdm'         -Value 1 -Type DWord -Force
 Set-ItemProperty -Path $TsPolicy -Name 'fDisablePnp'         -Value 1 -Type DWord -Force
-Set-ItemProperty -Path $TsPolicy -Name 'fSingleSessionPerUser' -Value 1 -Type DWord -Force
+
+# 会话时间限制：旧「共享 RDS」形态会残留 30 分钟空闲 / 5 分钟断线注销，
+# 新形态下实例生命周期由平台 reaper 负责，RDP 层不该踢人（否则用户回来必报
+# Idle session time limit exceeded）。0 = 不限制。
+$TsLimits = @('MaxIdleTime', 'MaxDisconnectionTime', 'MaxConnectionTime')
+foreach ($name in $TsLimits) {
+    Set-ItemProperty -Path $TsPolicy   -Name $name -Value 0 -Type DWord -Force
+    Set-ItemProperty -Path $TsListener -Name $name -Value 0 -Type DWord -Force
+}
 Write-Host "      UserAuthentication=0（关 NLA）、SecurityLayer=1（协商 TLS）" -ForegroundColor Green
 Write-Host "      剪贴板保留启用；驱动器/打印机重定向已禁用" -ForegroundColor Green
+Write-Host "      会话时限已清零（MaxIdleTime/MaxDisconnectionTime/MaxConnectionTime=0）" -ForegroundColor Green
+Write-Host "      注意：Policies 下的值受组策略托管，若机器上配了本地/域 GPO，" -ForegroundColor Yellow
+Write-Host "        下次 gpupdate 会把值刷回来——需在 gpedit 里把「会话时间限制」设为未配置/从不。" -ForegroundColor Yellow
 Write-Host "      注意：关 NLA 后后端 .env 必须是 GUAC_RDP_SECURITY=tls（配合 GUAC_RDP_IGNORE_CERT=true），" -ForegroundColor Yellow
 Write-Host "        否则 Guacamole 仍按 nla 发起协商，登录必然失败。" -ForegroundColor Yellow
 Write-Host "      注意：以上注册表改动要重启 TermService 才生效（脚本末尾会安排自动重启）。" -ForegroundColor Yellow
@@ -301,6 +319,8 @@ $checks = [ordered]@{
     qemu_guest_agent     = $AgentOk
     nla_disabled         = $true
     term_service_restart = $TermServiceRestart
+    session_limits_off   = $true
+    clipboard_enabled    = $true
     rdp_firewall_scoped  = ($GuacdSource.Count -gt 0)
     ssh_firewall_scoped  = ($PlatformSource.Count -gt 0)
 }
