@@ -1,8 +1,19 @@
 /**
- * 空闲回收扫描器 —— docs/multi-vm-desktop-plan.md 9.5（7 天挂起 / 30 天销毁）
+ * 空闲回收扫描器 —— docs/multi-vm-desktop-plan.md 9.5（7 天挂起 / 30 天销毁 / 180 天强制重建）
  *
- * 它只做**判定与入队**，真正的挂起/销毁在 `tasks/suspend.ts`、`tasks/recycle.ts` 里，
- * 由队列串行执行。这样扫描是纯读+轻写（毫秒级），不会因为一台机器关机慢而拖住整批。
+ * 它只做**判定与入队**，真正的挂起/销毁/重建在 `tasks/*` 里，由队列串行执行。
+ * 这样扫描是纯读+轻写（毫秒级），不会因为一台机器关机慢而拖住整批。
+ *
+ * ## 判定优先级（顺序即语义，别调换）
+ *
+ *   ① connected 超 grace → 降级 idle
+ *   ② 账号停用          → 立即回收（离职账号的机器不该继续占资源）
+ *   ③ 空闲 ≥ 销毁线     → 回收
+ *   ④ VM 机龄 ≥ 重建线  → 重建（配额 allow_rebuild=false 时跳过）
+ *   ⑤ 空闲 ≥ 挂起线     → 挂起
+ *
+ * ③ 在 ④ 之前：销毁比重建更彻底，能销毁就别浪费一次克隆。
+ * ④ 在 ⑤ 之前：到了换机周期就别先挂起再等下一次唤醒。
  *
  * ## 空闲基线怎么来（这块最容易设计错）
  *
@@ -21,6 +32,8 @@
  * 「7 天」这种边界判断。TS 里只处理算好的浮点天数。
  *
  * ⚠️ 用户停用（`users.is_active=false`）的桌面优先回收，不看空闲天数。
+ * ⚠️ 重建的计时基准是**当前 VM 的 created_at**，不是实例的 —— 实例行会跨多次
+ * 重建存活，用实例时间会导致「刚重建完第二天又到线」的死循环。
  */
 import { sql } from 'drizzle-orm';
 import { getSettings } from '../config/env.js';
@@ -29,7 +42,10 @@ import { enqueueTask } from './queue.js';
 
 const HOURS_PER_DAY = 24;
 
-export type SweepActionKind = 'idle' | 'suspend' | 'recycle';
+/** `desktop_quotas.rebuild_after_days` 的 DDL 默认值；配额行为 null 时的兜底 */
+const DEFAULT_REBUILD_DAYS = 180;
+
+export type SweepActionKind = 'idle' | 'suspend' | 'recycle' | 'rebuild';
 
 export interface SweepAction {
   readonly kind: SweepActionKind;
@@ -48,6 +64,10 @@ interface CandidateRow {
   readonly idle_days: number | string | null;
   readonly idle_limit: number | string | null;
   readonly destroy_limit: number | string | null;
+  /** 当前 VM 的机龄（天数）；无 VM 为 null */
+  readonly vm_age_days: number | string | null;
+  readonly rebuild_limit: number | string | null;
+  readonly allow_rebuild: boolean | null;
 }
 
 const asNum = (value: number | string | null, fallback: number): number => {
@@ -78,12 +98,17 @@ export const sweepIdleInstances = async (): Promise<readonly SweepAction[]> => {
              EXTRACT(EPOCH FROM ((now() AT TIME ZONE 'UTC')
                - COALESCE(i.last_disconnected_at, i.last_connected_at, i.created_at))) / 86400.0
                AS idle_days,
+             EXTRACT(EPOCH FROM ((now() AT TIME ZONE 'UTC') - v.created_at)) / 86400.0
+               AS vm_age_days,
              q.max_idle_days            AS idle_limit,
-             q.destroy_after_idle_days  AS destroy_limit
+             q.destroy_after_idle_days  AS destroy_limit,
+             q.rebuild_after_days       AS rebuild_limit,
+             q.allow_rebuild            AS allow_rebuild
       FROM desk_instances i
       JOIN users u ON u.id = i.user_id
       LEFT JOIN desktop_quotas q ON q.id = i.quota_id
-      WHERE i.status IN ('connected', 'idle', 'ready', 'suspended')
+      LEFT JOIN desktop_vms v ON v.id = i.current_vm_id
+      WHERE i.status IN ('connected', 'idle', 'ready', 'suspended', 'awaiting_account')
     `);
     return (result as unknown as { rows: readonly CandidateRow[] }).rows ?? [];
   });
@@ -149,9 +174,44 @@ export const sweepIdleInstances = async (): Promise<readonly SweepAction[]> => {
       continue;
     }
 
-    // ④ 超过挂起线（idle / ready 都算：创建后一直没用的桌面同样不该长期占内存）
+    // ④ VM 机龄到线 → 重建（换机周期，不是故障自愈）
+    //
+    // 三个限定：
+    //  - `allow_rebuild=false` 直接跳过：入队也只会失败，还污染任务表；
+    //  - `connected` 跳过：重建会把人踢下线，等他断开（降级 idle）后再来；
+    //  - 机龄取**当前 VM** 的 created_at，不是实例的（见文件头）。
+    const rebuildDays = asNum(row.rebuild_limit, DEFAULT_REBUILD_DAYS);
+    const vmAgeDays = row.vm_age_days === null ? null : asNum(row.vm_age_days, 0);
+    if (
+      row.allow_rebuild !== false
+      && status !== 'connected'
+      && vmAgeDays !== null
+      && vmAgeDays >= rebuildDays
+    ) {
+      const enqueued = await enqueueTask({
+        taskKey: `rebuild:instance:${instanceId}:${today}`,
+        type: 'rebuild',
+        instanceId,
+        userId,
+      });
+      if (enqueued.created) {
+        actions.push({
+          kind: 'rebuild',
+          instanceId,
+          reason: `VM 已运行 ${Math.floor(vmAgeDays)} 天 ≥ ${rebuildDays}`,
+        });
+      }
+      continue;
+    }
+
+    // ⑤ 超过挂起线（idle / ready / awaiting_account 都算：
+    //    创建后一直没用的桌面同样不该长期占内存；awaiting_account 是「建好了但用户还没登录过」，
+    //    它此前完全不在扫描范围里 —— 漏掉就等于这类桌面永不被回收）
     const suspendDays = asNum(row.idle_limit, defaultSuspendDays);
-    if ((status === 'idle' || status === 'ready') && idleDays >= suspendDays) {
+    if (
+      (status === 'idle' || status === 'ready' || status === 'awaiting_account')
+      && idleDays >= suspendDays
+    ) {
       const enqueued = await enqueueTask({
         taskKey: `suspend:instance:${instanceId}:${today}`,
         type: 'suspend',

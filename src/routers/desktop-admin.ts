@@ -192,6 +192,7 @@ export const desktopAdminRoutes: FastifyPluginAsync = async (app) => {
         desktopEnabled: row.user.desktopEnabled,
         vm: row.vm ?? null,
         templateCode: row.template?.code ?? null,
+        templateUpdatedAt: row.template?.updatedAt ?? null,
         quotaCode: row.quota?.code ?? null,
       }, latest.get(row.instance.id) ?? null));
     });

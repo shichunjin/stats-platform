@@ -80,6 +80,7 @@
 | **A27** | 列表页要显示「最近一条任务」，最直接的写法是每行一个相关子查询 | 改为**一次 `IN (...)` 查询 + 内存折叠**（按 id 倒序取每实例第一条）：列表上限 200 行，N+1 会把管理页从十几毫秒拖到秒级。另：`desktop_quotas.max_daily_hours` 是 `numeric`，drizzle 0.33 读出来是 **string**，出向 schema 声明 `number`，必须在 mapper 里 `Number()` 收敛 —— 否则 fast-json-stringify 抛 TypeError，整个 `/admin/desktop-quotas` 500 | 6.4、附录 C |
 | **A28** | 第 6 章写 `rebuild` 是「从模板重建（**保留用户数据盘**）」，与 3.2「数据留中心文件服务器、VM 无状态」矛盾 | **明确 rebuild 不保留任何本地数据**：数据在文件服务器，VM 只是算力。因此 rebuild = 销毁 + 重新克隆，顺序固定为**先销毁再克隆**（同节点资源未必容得下两台，先 clone 在资源紧张时直接失败）。三个落地约束：① 销毁序列抽成 `src/desktop/vm-teardown.ts`，与 `recycle` 共用（顺序错一步的后果都在运维现场）；② rebuild 期间实例钉在 `provisioning`，**绝不复用 `destroyed`** —— `destroyed` 不在活跃唯一索引里，重建失败会产生第二条实例行、丢光 rebuild_count 与审计归属；③ 新 VM 必须清空 `account_synced_at` / `password_version`，否则停在假的 `ready`（A16 在重建场景的复现），清空后 `isAccountStale()` 为 true，用户下次登录自动补建账号 | 3.2、6.4、9.7 |
 | **A29** | `desktop_ip_allocations.vm_id` 从没被写过，而回收时按 `WHERE vm_id = ?` 释放 —— 条件永不成立 | **这是一条真实的 IPAM 泄漏**：IP 一旦分配就再也不回池，单台看不出来，靠 reaper 反复创建/销毁才会暴露成「池子被吃光」。修复两处：① `create` / `rebuild` 落 `desktop_vms` 后**回填 `vm_id`**；② 释放改**双条件**（`vm_id = ?` 或 `ip_address = primary_ip`），兜住历史数据与手工配址。重建场景对此格外敏感 —— 必须先释放旧地址再向 IPAM 要新的（顺序反过来会在池子只剩一个地址时把自己锁死） | 7.9、9.7 |
+| **A30** | 9.5 定的「180 天强制重建」只有字段没有实现；扫描器还有个隐性缺口 | **实现 `rebuild_after_days`**，并在写码时确认了四条：① 计时基准必须是**当前 VM 的 `created_at`**（`desk_instances` 行跨重建存活，用实例时间会「刚重建完又到线」）；② `connected` 跳过 —— 重建会把人踢下线；③ `allow_rebuild=false` 也跳过，入队只会失败并污染任务表；④ 优先级 **销毁 > 重建 > 挂起**（能销毁就别浪费一次克隆）。**顺带补的缺口**：`awaiting_account` 此前完全不在扫描范围里 —— 「建好了但用户没登录过」的桌面既不会挂起也不会销毁，只会越积越多。另：管理端新增 `template_drift`（模板 `updated_at` > VM `created_at`）作为**零成本近似信号**，圈出「可能还跑着旧 login.ps1」的机器；精确核对需读 VM 上的 `template-manifest.json`，每分钟一次 SSH 不划算，且误报成本远低于漏报 | 9.5、6.4 |
 
 ### 未变的部分
 
@@ -348,8 +349,8 @@
 | **分配** | `desk_instances` 上 `(user_id) WHERE status IN (...)` **部分唯一索引**保证一人一活跃桌面；并发用 `pg_advisory_xact_lock(hash(user_id))` | 防重复点按钮开出两台 VM |
 | **初始化** | 克隆后：⓪ 按配额设置 `cores`/`memory`（`spec_*`，见 7.6；clone API 无此参数，需 `PUT config`）① 开机 ② 等 Guest Agent `guest-ping` 成功 ③ 注入计算机名 `DESK-{username}` ④ SSH 建本地账号（**密码 = 平台密码**，见 3.4.1；只跑 `buildAccountScript`，不跑 workspace 脚本）⑤ 加入 Remote Desktop Users ⑥ 写 Guacamole 连接（hostname=VM IP）⑦ RDP 3389 端口探测 | 第 ⑥⑦ 步必须对同一 IP 做「TCP 3389 可连 + 可选 RDP banner 探测」；探测用 `probeTcp()` 与 `probeSshConnection()` |
 | **复用** | 已存在 `status='ready'` 的实例 → 若 `power_state='stopped'` 则开机并重新探测 → 直接返回连接 | 不做重新克隆 |
-| **回收** | 三档策略，可配：`idle_suspend_days=7`（挂起，内存释放）、`idle_destroy_days=30`（销毁 VM，保留用户数据盘/快照）、`max_lifetime_days=180`（强制重建） | 数据盘在文件服务器，销毁 VM 不丢数据 |
-| **回收执行** | DMS 定时任务每 10 分钟扫描 `last_disconnected_at`，写 `desktop_tasks(type='recycle')` 串行执行 | 销毁前先 `shutdown`（优雅）+ 快照（可选）+ 释放 IP + 删除 guac 连接映射 |
+| **回收** | 三档策略，可配：`idle_suspend_days=7`（挂起，内存释放）、`idle_destroy_days=30`（销毁 VM）、`rebuild_after_days=180`（强制重建） | 数据盘在文件服务器，销毁 VM 不丢数据；重建的计时基准是**当前 VM 的 `created_at`**（实例行跨多次重建存活，用实例时间会变成「刚重建完又到线」的死循环） |
+| **回收执行** | DMS 定时任务每 10 分钟扫描，写 `desktop_tasks` 串行执行；判定优先级 **销毁 > 重建 > 挂起** | 销毁前先 `shutdown`（优雅）+ 快照（可选）+ 释放 IP + 删除 guac 连接映射；`connected` 状态一律跳过重建，不把人踢下线 |
 
 ### 3.4 Guacamole 连接如何自动注册
 
@@ -1454,7 +1455,7 @@ if (mode === 'rds') {
 | **2. 架构评审** | 定稿架构与选型 | 评审通过的架构图、选型结论、成本估算 | 决策人签字；授权成本已核算 |
 | **3. 模板制作** | 做出可克隆的黄金镜像 | Windows Server 2022 模板 VM：装统计软件、`login.ps1` + `software-registry.json`、OpenSSH、QEMU Guest Agent、关 NLA + `SecurityLayer=1`、防火墙规则、`software-registry` 版本登记 —— **其中除「装软件/sysprep」外已脚本化为 `powershell/prepare-desktop-template.ps1`（A24）** | 手动克隆 1 台 → 开机 → RDP 可连 → W:/Z:/pending 正确 → 软件可启动 → 关机转模板成功 |
 | **4. 虚拟化平台接入** | Provider 打通 | Proxmox 集群（或 ECS 可用区）、API token、网段/VLAN、IPAM、与 Linux 服务器的隧道 | 脚本能完成「克隆→开机→取 IP→探 3389→销毁」全流程，耗时 <90s |
-| **5. DMS 开发（核心）** | 生命周期 + 绑定 + 注册 | `desktop_*` 表（7 张）+ `DesktopProvider` + 任务队列 + worker + 基础 API | 单用户能完成 5.2 的全流程；所有步骤幂等；失败有明确错误码 |
+| **5. DMS 开发（核心）** | 生命周期 + 绑定 + 注册 | `desktop_*` 表（7 张）+ `DesktopProvider` + 任务队列 + worker + 生命周期任务（create/start/probe/suspend/recycle/**rebuild**）+ reaper（7 天挂起 / 30 天销毁 / 180 天强制重建）+ 管理端 9 个端点 | 单用户能完成 5.2 的全流程；所有步骤幂等；失败有明确错误码 **✅ 2026-11-03 代码侧达成（484 用例绿）；真机验证待阶段 4** |
 | **6. Guacamole 连接自动注册** | 改造 `src/integrations/guac.ts::buildRdpParameters` | `hostname/port` 参数化；新增 `updateConnectionTarget()` / `revokeConnectionRead()`；`guac_connection_map` 写入；`params_hash` 免重复同步 | 同一用户换 VM 后，下次 connect 自动指向新 IP；回滚写回 `rdsHost` 验证通过；**改密后 `guacamole_user` 密码未被连接参数覆盖** |
 | **7. 用户门户改造** | 前端异步化 + 管理页 | `Dashboard.vue` 轮询/进度；`/admin/desktops` 管理页 | 前端在 `rds` 模式下行为不变（向后兼容）；`vm` 模式下有进度与失败提示 |
 | **8. 单用户 POC** | 端到端跑通 1 人 | 内部账号完整走一遍 8.5 的 10 项验证 | 10 项全绿；审计链完整 |
@@ -1491,20 +1492,26 @@ if (mode === 'rds') {
 
 | 文件 | 说明 |
 |---|---|
-| `src/desktop/index.ts` | `FastifyPluginAsync`，注册 `/desktop/*` 与 `/admin/desktops/*` |
-| `src/desktop/provider/types.ts` / `proxmox.ts` | `DesktopProvider` 接口与 Proxmox 实现（`fetch` + token header） |
-| `src/desktop/provider/probe.ts` | `probeTcp(host, port, timeoutMs)`（`node:net`）；SSH 探活直接复用 `src/integrations/ssh-probe.ts` |
-| `src/desktop/service/ensure.ts` | 幂等「确保桌面就绪」：查实例 → 查配额 → 建任务（含 `pg_advisory_xact_lock`） |
-| `src/desktop/service/provision.ts` | clone → start → waitAgent → 建账号 → 探测 → 注册 guac → 写映射（每步幂等） |
-| `src/desktop/service/recycle.ts` | 空闲挂起 / 销毁 + 快照 + 释放 IP + `revokeConnectionRead` |
-| `src/desktop/service/reconcile.ts` | 对账：Provider 实际 VM ↔ `desktop_vms` 差异修正 |
-| `src/desktop/worker.ts` | `setInterval` + `FOR UPDATE SKIP LOCKED` 消费 `desktop_tasks`；启动时重置 stale `running` |
-| `src/routers/desktop-admin.ts` | 管理端 9 个端点：实例列表 / 任务队列 / 挂起·回收·探活 / 任务重跑 / 模板只读 / 配额读写（A26） |
-| `powershell/lib/stats-config.ps1` | 共享根（文件服务器）单一实现：`Resolve-StatsFileServer` / `Set-StatsFileServer` / UNC 规整；被 4 个 Windows 脚本 dot-source（A23） |
-| `powershell/prepare-desktop-template.ps1` | 模板固化：共享根 + 脚本部署 + RDP 参数 + 防火墙 + OpenSSH + Guest Agent 检查 + `template-manifest.json`（A24） |
-| `src/db/schema.desktop.ts` | 7 张表的 Drizzle 定义（也可直接并入 `schema.ts`，二选一，不要两处都写） |
-| `frontend/src/views/admin/DesktopManage.vue` | 实例/模板/配额/任务四个 Tab |
-| `tests/ts/desktop-*.test.ts` | 见 A.4 |
+| `src/desktop/provider/types.ts` | `DesktopProvider` 接口 + `resolveVmSpec` / `toSpecUpdate`（配额覆盖模板基线，A12）—— ✅ 已落地 |
+| `src/desktop/provider/proxmox.ts` | Proxmox 实现：原生 `fetch` + token header；`ProxmoxError` 带端点与状态码，`fetch` 可注入 —— ✅ 已落地 |
+| `src/desktop/provider/probe.ts` | `probeTcp(host, port, timeoutMs)`（`node:net`）；失败返回 `{ok:false}` 而非抛异常 —— ✅ 已落地 |
+| `src/desktop/provider/lifecycle.ts` | `ensureVmRunning`：inspect → start → 轮询到 running —— ✅ 已落地 |
+| `src/desktop/queue.ts` | 入队（`task_key` 幂等）/ 取任务（`FOR UPDATE SKIP LOCKED`）/ 成功收尾 / 指数退避失败 —— ✅ 已落地 |
+| `src/desktop/worker.ts` | `setInterval` + busy 锁消费 `desktop_tasks`；未注册类型直接判失败（不静默卡 running）—— ✅ 已落地 |
+| `src/desktop/service.ts` | `ensureDesktop` / `findActiveInstance` / `allocateIpFromPool` / `syncGuacForInstance` / `syncVmAccount` / `notifyVmPasswordChange` —— ✅ 已落地 |
+| `src/desktop/vm-teardown.ts` | 销毁序列单一实现（快照→关机→destroy→释放 IPAM→撤 guac READ→解绑），`recycle` 与 `rebuild` 共用（A28）—— ✅ 已落地 |
+| `src/desktop/reaper.ts` | 每 10 分钟扫描：7 天挂起 / 30 天销毁 / 180 天强制重建；天数在 SQL 内算（A30）—— ✅ 已落地 |
+| `src/desktop/tasks/{create,start,probe,suspend,recycle,rebuild}.ts` | 六个生命周期任务；`context.ts` 提供 `loadTaskContext` + `isAccountStale`；`index.ts` 是分发表 —— ✅ 已落地 |
+| `src/bootstrap/worker.ts` | worker + reaper 同生共死启动（`desktopEnabled=false` 时不启动）—— ✅ 已落地 |
+| `src/routers/desktop.ts` | 用户侧：`POST /desktop/ensure`、`GET /desktop/status`（灰度关闭时返回 `mode=rds`）—— ✅ 已落地 |
+| `src/routers/desktop-admin.ts` | 管理端 10 个端点：实例列表 / 任务队列 / 挂起·回收·**重建**·探活 / 任务重跑 / 模板只读 / 配额读写（A26、A28）—— ✅ 已落地 |
+| `src/db/schema.ts` | 7 张表直接并入现有 schema（**没有**拆成 `schema.desktop.ts`：拆开会让循环外键与 relations 分散在两处）—— ✅ 已落地 |
+| `powershell/lib/stats-config.ps1` | 共享根（文件服务器）单一实现：`Resolve-StatsFileServer` / `Set-StatsFileServer` / UNC 规整；被 4 个 Windows 脚本 dot-source（A23）—— ✅ 已落地 |
+| `powershell/prepare-desktop-template.ps1` | 模板固化：共享根 + 脚本部署 + RDP 参数 + 防火墙 + OpenSSH + Guest Agent 检查 + `template-manifest.json`（A24）—— ✅ 已落地 |
+| `src/desktop/reconcile.ts`（计划中） | 对账：Provider 实际 VM ↔ `desktop_vms` 差异修正 —— ⬜ 需真机联调后才有意义 |
+| `src/desktop/tasks/{config,register}.ts`（计划中） | 模板内配置下发 / 账号注册。目前账号走 SSH（`syncVmAccount`），配置下发依赖模板脚本 —— ⬜ 未注册类型会明确失败，不会静默 |
+| `frontend/src/views/admin/DesktopManage.vue` | 实例/模板/配额/任务四个 Tab —— ⬜ 阶段 7 |
+| `tests/ts/desktop-*.test.ts` | 7 个测试文件（schema / spec / queue / provider / api / lifecycle / rebuild / reaper / admin）—— ✅ 已落地 |
 
 ### A.3 容易被漏掉的 PowerShell 硬编码（共 4 处）
 

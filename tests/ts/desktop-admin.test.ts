@@ -41,7 +41,10 @@ const insertTemplate = async (): Promise<number> => withSession(async (db) => {
   return row!.id;
 });
 
-const insertQuota = async (templateId: number | null): Promise<number> =>
+const insertQuota = async (
+  templateId: number | null,
+  overrides: { readonly allowRebuild?: boolean } = {},
+): Promise<number> =>
   withSession(async (db) => {
     const [row] = await db.db.insert(desktopQuotas).values({
       code: 'default',
@@ -52,6 +55,7 @@ const insertQuota = async (templateId: number | null): Promise<number> =>
       maxMemoryMb: 8192,
       maxIdleDays: 7,
       destroyAfterIdleDays: 30,
+      allowRebuild: overrides.allowRebuild ?? true,
       templateId,
     }).returning();
     await db.commit();
@@ -180,7 +184,27 @@ describe('GET /admin/desktops', () => {
     expect(row.task_type).toBe('probe');
     expect(row.task_status).toBe('failed');
     expect(row.task_error).toBe('3389 不可达');
+    // 模板刚建、VM 后建 → 没有漂移
+    expect(row.template_drift).toBe(false);
+    expect(typeof row.vm_created_at).toBe('string');
     expect(typeof row.created_at).toBe('string');
+  });
+
+  it('模板在 VM 创建后被更新 → template_drift=true（这台机器可能还在跑旧脚本）', async () => {
+    const admin = await seedUser({ username: 'root', role: 'admin' });
+    const templateId = await insertTemplate();
+    await seedInstance({ username: 'alice', templateId, status: 'ready' });
+
+    // 直接把模板 updatedAt 推到未来，模拟「先建 VM、后改模板」
+    await withSession(async (db) => {
+      await db.db.update(desktopTemplates)
+        .set({ updatedAt: new Date(Date.now() + 60_000) })
+        .where(eq(desktopTemplates.id, templateId));
+      await db.commit();
+    });
+
+    const response = await request(app, { method: 'GET', url: '/admin/desktops', user: admin });
+    expect(response.json<Array<Record<string, unknown>>>()[0]!.template_drift).toBe(true);
   });
 
   it('支持按 status 与 desktop_mode 过滤', async () => {
@@ -303,6 +327,58 @@ describe('POST /admin/desktops/:id/{suspend,recycle,probe}', () => {
       method: 'POST', url: '/admin/desktops/9999/recycle', user: admin,
     });
     expect(response.statusCode).toBe(404);
+  });
+});
+
+describe('POST /admin/desktops/:id/rebuild', () => {
+  it('配额允许 → 入队 rebuild 任务并返回 task_id', async () => {
+    const admin = await seedUser({ username: 'root', role: 'admin' });
+    const templateId = await insertTemplate();
+    const quotaId = await insertQuota(templateId, { allowRebuild: true });
+    const instanceId = await seedInstance({
+      username: 'alice', templateId, quotaId, status: 'ready',
+    });
+
+    const response = await request(app, {
+      method: 'POST', url: `/admin/desktops/${instanceId}/rebuild`, user: admin,
+    });
+    expect(response.statusCode).toBe(200);
+    const body = response.json<{ created: boolean; task_id: number | null }>();
+    expect(body.created).toBe(true);
+    expect(body.task_id).not.toBeNull();
+
+    const tasks = await withSession(async (db) => db.db.select().from(desktopTasks));
+    expect(tasks[0]!.type).toBe('rebuild');
+    expect(tasks[0]!.instanceId).toBe(instanceId);
+  });
+
+  it('配额 allow_rebuild=false → 422 且不入队（别让人等一条注定失败的任务）', async () => {
+    const admin = await seedUser({ username: 'root', role: 'admin' });
+    const templateId = await insertTemplate();
+    const quotaId = await insertQuota(templateId, { allowRebuild: false });
+    const instanceId = await seedInstance({
+      username: 'alice', templateId, quotaId, status: 'ready',
+    });
+
+    const response = await request(app, {
+      method: 'POST', url: `/admin/desktops/${instanceId}/rebuild`, user: admin,
+    });
+    expect(response.statusCode).toBe(422);
+    const tasks = await withSession(async (db) => db.db.select().from(desktopTasks));
+    expect(tasks).toHaveLength(0);
+  });
+
+  it('终态实例（destroyed）→ 400，先让用户重新申请', async () => {
+    const admin = await seedUser({ username: 'root', role: 'admin' });
+    const templateId = await insertTemplate();
+    const instanceId = await seedInstance({
+      username: 'alice', templateId, status: 'destroyed', withVm: false,
+    });
+
+    const response = await request(app, {
+      method: 'POST', url: `/admin/desktops/${instanceId}/rebuild`, user: admin,
+    });
+    expect(response.statusCode).toBe(400);
   });
 });
 

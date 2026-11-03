@@ -411,6 +411,11 @@ export const desktopAdminOutSchema = z.object({
   vm_id: z.number().int().nullable(),
   vm_name: z.string().nullable(),
   vm_ip: z.string().nullable(),
+  vm_created_at: isoDateTimeSchema.nullable()
+    .openapi({ description: '当前 VM 的创建时间（reaper 的重建计时基准）' }),
+  template_drift: z.boolean().openapi({
+    description: '模板在本 VM 创建后被更新过 —— 这台机器可能还跑着旧 login.ps1/旧软件清单（近似信号，精确核对需读 VM 上的 template-manifest.json）',
+  }),
   provider_ref: z.string().nullable().openapi({ description: '<node>/<vmid>' }),
   provider_node: z.string().nullable(),
   power_state: z.string().nullable().openapi({ description: 'running/stopped/suspended/unknown' }),
@@ -513,6 +518,8 @@ export const toDesktopAdminOut = (
     readonly desktopEnabled: boolean;
     readonly vm: DesktopVm | null;
     readonly templateCode: string | null;
+    /** 模板最近更新时间：与 vm.createdAt 比对得出 template_drift */
+    readonly templateUpdatedAt: Date | null;
     readonly quotaCode: string | null;
   },
   latestTask: DesktopTask | null,
@@ -531,6 +538,12 @@ export const toDesktopAdminOut = (
     vm_id: vm?.id ?? null,
     vm_name: vm?.name ?? null,
     vm_ip: vm?.primaryIp ?? null,
+    vm_created_at: vm === null ? null : toIso(vm.createdAt),
+    // 近似漂移信号：模板改过（脚本/软件清单更新）而 VM 还是旧的。
+    // 刻意不查 VM 上的 template-manifest.json —— probe 每分钟一次 SSH 不划算，
+    // 且管理端的用途只是「圈出可能需要重建的机器」，误报成本低、漏报成本高。
+    template_drift: vm !== null && row.templateUpdatedAt !== null
+      && row.templateUpdatedAt > vm.createdAt,
     provider_ref: vm?.providerRef ?? null,
     provider_node: vm?.providerNode ?? null,
     power_state: vm?.powerState ?? null,
