@@ -240,3 +240,64 @@ describe('create 流水线', () => {
     expect(vms).toHaveLength(0);
   });
 });
+
+/**
+ * VM 模式下 `/session/connect` 的引导语义。
+ *
+ * 关键约定：连不上时**必须报错并给出可执行文案**，不能返回空 guac_url ——
+ * 空 URL 在浏览器里是白屏，用户只会认为平台坏了。
+ */
+describe('POST /session/connect（VM 模式）', () => {
+  const seedReadyInstance = async (instanceStatus: string, powerState: string) => {
+    const templateId = (await insertTemplate()).id;
+    const alice = await seedUser({ username: 'alice' });
+    await setVmMode('alice');
+
+    await withSession(async (db) => {
+      const [instance] = await db.db.insert(deskInstances).values({
+        userId: alice.id, templateId, status: instanceStatus as never,
+        specVcpu: 4, specMemoryMb: 8192,
+      }).returning();
+      const [vm] = await db.db.insert(desktopVms).values({
+        instanceId: instance!.id, templateId, provider: 'proxmox', providerRef: 'pve1/9101',
+        name: 'DESK-alice', primaryIp: '10.20.3.11', powerState: powerState as never,
+      }).returning();
+      await db.db.update(deskInstances).set({ currentVmId: vm!.id })
+        .where(eq(deskInstances.id, instance!.id));
+      await db.commit();
+      return instance!.id;
+    });
+
+    return { alice, templateId };
+  };
+
+  it('awaiting_account → 503 提示先改一次密码（不返回空 URL）', async () => {
+    overrideSettings({ desktopEnabled: true });
+    const { alice } = await seedReadyInstance('awaiting_account', 'running');
+
+    const response = await request(app, { method: 'POST', url: '/session/connect', user: alice });
+    expect(response.statusCode).toBe(503);
+    expect(response.json<{ detail?: string }>().detail ?? response.body).toContain('修改一次密码');
+  });
+
+  it('仍在克隆/开机 → 503「正在准备中」', async () => {
+    overrideSettings({ desktopEnabled: true });
+    const { alice } = await seedReadyInstance('provisioning', 'stopped');
+
+    const response = await request(app, { method: 'POST', url: '/session/connect', user: alice });
+    expect(response.statusCode).toBe(503);
+  });
+
+  it('已挂起 → 入队 start 唤醒并提示稍后重试', async () => {
+    overrideSettings({ desktopEnabled: true });
+    const { alice } = await seedReadyInstance('suspended', 'suspended');
+
+    const response = await request(app, { method: 'POST', url: '/session/connect', user: alice });
+    expect(response.statusCode).toBe(503);
+
+    const tasks = await withSession(async (db) =>
+      db.db.select().from(desktopTasks).where(eq(desktopTasks.type, 'start')));
+    expect(tasks).toHaveLength(1);
+    expect(tasks[0]!.status).toBe('pending');
+  });
+});

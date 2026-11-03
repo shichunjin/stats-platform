@@ -55,6 +55,15 @@
 | **A17** | v2 只说「不引入 Redis/MQ」，没说任务队列放哪 | **用 PostgreSQL `FOR UPDATE SKIP LOCKED` 做队列**（`desktop_tasks`），worker 是同进程 `setInterval`。理由：`src/services/jobs.ts` 那套内存队列（Set + 数组）进程重启即丢，而克隆一台 VM 要几分钟，丢任务的后果是用户永远卡在 provisioning。单进程部署天然保证 worker 唯一（不需要选主） | 6.5、7.8 |
 | **A18** | 7.2 的 `provider_ref` 示例写作 `node=pve1,vmid=9001` | 统一为 **`<node>/<vmid>`**（如 `pve1/9101`）：`/` 分隔可直接 split 出节点，多节点部署时不必再解析 kv 串 | 7.2 |
 
+### v2.3 增补（2026-11-03 生命周期任务落地时发现）
+
+| # | 缺口 | 处理 | 影响面 |
+|---|---|---|---|
+| **A19** | 9.5 写「每 10 分钟扫描 `last_disconnected_at`」，但 **Guacamole 没有会话结束回调**，`last_disconnected_at` 根本没人写 | 用两级近似：连接时写 `last_connected_at` + 状态 `connected`；扫描器发现 `connected` 超过 `desktopConnectedGraceHours`（默认 12h）无活动 → 降级 `idle`，且把 `last_disconnected_at` 设为**当时的** `last_connected_at`（不是 now，否则每次扫描重置计时，永远到不了期）。**`ready` 也纳入扫描**（创建后一直没用的桌面同样不该长期占内存） | 9.5 |
+| **A20** | A16 的「请改一次密码」把成本转嫁给用户，而首次登录其实**同样握有明文密码** | `/auth/login` 也触发一次非阻断同步：账号已初始化（`password_version` 一致）时直接跳过不跑 SSH；否则顺手补齐。**改密接口里的 VM 同步严格非阻断**（`void` 掉），失败只留日志 —— 不能因为 VM 离线就让用户改不了密码 | 9.2、3.4.1 |
+| **A21** | `desk_instances.*` 是 `timestamp without time zone`，drizzle 写库用 UTC 墙钟、读库按本地时区解析（本机 +08 实测偏移 8 小时） | 空闲天数**一律在 SQL 里算**（`EXTRACT(EPOCH FROM ((now() AT TIME ZONE 'UTC') - COALESCE(...)))`），不让 8 小时误差进入「7 天」这种边界判断；TS 只处理算好的浮点天数 | 9.5 |
+| **A22** | 9.5 的「挂起」没说具体幂等键与自愈边界 | `suspend` / `recycle` 入队键按天（`suspend:instance:<id>:<yyyymmdd>`），重复扫描不重复入队；探活连续失败只做 **reset**，不做重建（重建要重装账号、重指连接，代价远高于自愈收益） | 9.5、9.8、9.10 |
+
 ### 未变的部分
 
 第 3 章架构、第 4 章选型（仍推荐 Proxmox VE）、第 5 章状态机与异常矩阵、

@@ -356,3 +356,22 @@ export const getUserConnectionId = async (username: string): Promise<number | nu
   if (result.rows.length === 0) return null;
   return Number((result.rows[0] as { connection_id: number }).connection_id);
 };
+
+/**
+ * 撤销某条连接的所有 READ 授权（回收桌面时调用）。
+ *
+ * 只删权限、**不删连接**：连接记录本身是 DMS 的映射锚点（`guac_connection_map`
+ * 存了 connection_id），删了下次重建要重新对齐；保留连接但没权限，用户在网关里
+ * 就看不到入口，效果等价而副作用更小。
+ */
+export const revokeConnectionRead = async (connectionId: number): Promise<boolean> => {
+  if (!guacSyncEnabled()) return false;
+
+  return inTransaction(async (conn) => {
+    const result = await conn.query(
+      "DELETE FROM guacamole_connection_permission WHERE connection_id = $1 AND permission = 'READ'",
+      [connectionId],
+    );
+    return (result.rowCount ?? 0) > 0;
+  });
+};

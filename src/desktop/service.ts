@@ -13,12 +13,13 @@ import { and, desc, eq, inArray, sql } from 'drizzle-orm';
 import { getSettings } from '../config/env.js';
 import type { AppDatabase } from '../db/client.js';
 import {
-  deskInstances, desktopIpAllocations, desktopTemplates,
+  deskInstances, desktopIpAllocations, desktopTemplates, desktopVms,
   guacConnectionMap, users, type DeskInstance, type DeskInstanceStatus,
   type DesktopQuota, type DesktopTemplate, type DesktopVm, type User,
 } from '../db/schema.js';
 import { withSession } from '../db/session.js';
 import { ensureUserConnectionDetail, guacSyncEnabled, hashParameters, buildRdpParameters } from '../integrations/guac.js';
+import { ensureVmRunning } from './provider/lifecycle.js';
 import { getDesktopProvider } from './provider/proxmox.js';
 import { resolveVmSpec } from './provider/types.js';
 import { enqueueTask } from './queue.js';
@@ -228,6 +229,14 @@ export const syncGuacForInstance = async (
 
   const paramsHash = hashParameters(buildRdpParameters(username, null, target));
   await withSession(async (db) => {
+    // 同一 guacamole 连接可能被上一个已销毁的实例占用（一人一连接，回收后复用）。
+    // 不先清理就会撞 `uq_guac_map_conn`，表现是「重建桌面时 500」。
+    await db.db.delete(guacConnectionMap)
+      .where(and(
+        eq(guacConnectionMap.guacConnectionId, ids.connectionId),
+        sql`${guacConnectionMap.instanceId} <> ${instanceId}`,
+      ));
+
     await db.db.insert(guacConnectionMap).values({
       instanceId,
       userId,
@@ -256,41 +265,88 @@ export const syncGuacForInstance = async (
   return ids.connectionId;
 };
 
+export type SyncAccountReason =
+  | 'no_instance'
+  | 'vm_not_ready'
+  | 'vm_offline'
+  | 'wake_timeout'
+  | 'ssh_failed'
+  | 'no_user';
+
 export interface SyncAccountResult {
   readonly ok: boolean;
   /** ok=false 时的原因；调用方据此决定「阻断改密」还是「记日志 + 待补偿」 */
-  readonly reason: string | null;
+  readonly reason: SyncAccountReason | null;
   readonly host: string | null;
 }
 
 /**
  * 把明文密码同步进用户 VM 里的 Windows 本地账号（方案 A′ 的第四端）。
  *
- * ⚠️ 只能在**拿得到明文**的时刻调用（注册 / 改密）——平台只存哈希，
- * 之后无论如何都补不回来。VM 不存在或离线时返回 ok=false，
- * 由调用方决定降级策略（见 desk_instances.password_version 的补偿语义）。
+ * ⚠️ 只能在**拿得到明文**的时刻调用（注册 / 改密）—— 平台只存哈希，
+ * 之后无论如何都补不回来。
+ *
+ * 与 v2.2 相比多了一步「唤醒」：用户改密时桌面很可能处于挂起/关机（空闲 7 天
+ * 就会挂起）。旧实现直接返回 `vm_offline`，于是密码永远补不进去，
+ * 用户再登录就落到 `awaiting_account`、再改一次密码还是离线 —— 死循环。
+ * 现在会先 `start` 再等它 running（预算 `desktopAccountSyncTimeoutMs`），
+ * 唤醒代价是 A15 的两个副作用（时钟漂移、SMB 重连），但比「密码永久对不上」划算。
  */
 export const syncVmAccount = async (
   userId: number,
   password: string,
+  options: { readonly wake?: boolean } = {},
 ): Promise<SyncAccountResult> => {
   const active = await findActiveInstance(userId);
   if (!active) return { ok: false, reason: 'no_instance', host: null };
 
   const { instance, vm } = active;
-  if (!vm || vm.primaryIp === null) return { ok: false, reason: 'vm_not_ready', host: null };
-  if (vm.powerState !== 'running') return { ok: false, reason: 'vm_offline', host: vm.primaryIp };
+  if (!vm) return { ok: false, reason: 'vm_not_ready', host: null };
 
-  // 动态导入：windows-account 会连带 ssh2，DMS 关闭时不必付出加载成本
-  const { syncWindowsUser } = await import('../integrations/windows-account.js');
+  let host = vm.primaryIp;
+  const provider = getDesktopProvider();
+
+  if (vm.powerState !== 'running') {
+    if (options.wake !== true || provider === null) {
+      return { ok: false, reason: 'vm_offline', host };
+    }
+    const run = await ensureVmRunning(
+      provider, vm.providerRef, getSettings().desktopAccountSyncTimeoutMs,
+    );
+    if (!run.ok) {
+      return { ok: false, reason: run.reason === 'timeout' ? 'wake_timeout' : 'vm_offline', host };
+    }
+    const inspected = await provider.inspect(vm.providerRef).catch(() => null);
+    host = inspected?.primaryIp ?? host;
+
+    await withSession(async (db) => {
+      await db.db.update(desktopVms).set({
+        powerState: 'running',
+        ...(host === null ? {} : { primaryIp: host }),
+        agentReady: inspected?.agentReady ?? vm.agentReady,
+        lastProbeAt: new Date(),
+      }).where(eq(desktopVms.id, vm.id));
+      await db.commit();
+    });
+  }
+
+  if (host === null) return { ok: false, reason: 'vm_not_ready', host: null };
+
   const [user] = await withSession(async (db) => {
     const rows = await db.db.select().from(users).where(eq(users.id, userId)).limit(1);
     return rows;
   });
-  if (!user) return { ok: false, reason: 'no_user', host: vm.primaryIp };
+  if (!user) return { ok: false, reason: 'no_user', host };
 
-  // workspace=false：VM 上绝不建 SMB 共享与 NTFS ACL，那是文件服务器的职责
-  await syncWindowsUser(user.username, password, { host: vm.primaryIp, workspace: false });
+  // 动态导入：windows-account 会连带 ssh2，DMS 关闭时不必付出加载成本
+  const { syncWindowsUser } = await import('../integrations/windows-account.js');
+  try {
+    // workspace=false：VM 上绝不建 SMB 共享与 NTFS ACL，那是文件服务器的职责
+    await syncWindowsUser(user.username, password, { host, workspace: false });
+  } catch (error) {
+    console.warn('[desktop] VM 账号同步失败 user=%s host=%s: %s', user.username, host, error);
+    return { ok: false, reason: 'ssh_failed', host };
+  }
 
   await withSession(async (db) => {
     await db.db.update(deskInstances)
@@ -303,7 +359,68 @@ export const syncVmAccount = async (
     await db.commit();
   });
 
-  return { ok: true, reason: null, host: vm.primaryIp };
+  return { ok: true, reason: null, host };
+};
+
+/** 同一用户的同步串行化：连续改两次密码时不并发 SSH（后一次会覆盖前一次） */
+const pendingSyncs = new Map<number, Promise<SyncAccountResult>>();
+
+/** VM 里的账号是否已经是最新密码（不需要再跑一次 SSH） */
+const isAccountCurrent = async (userId: number): Promise<boolean> =>
+  withSession(async (db) => {
+    const [row] = await db.db.select({
+      accountSyncedAt: deskInstances.accountSyncedAt,
+      syncedVersion: deskInstances.passwordVersion,
+      userVersion: users.passwordVersion,
+    }).from(deskInstances)
+      .innerJoin(users, eq(users.id, deskInstances.userId))
+      .where(and(
+        eq(deskInstances.userId, userId),
+        inArray(deskInstances.status, ACTIVE_STATUSES),
+      ))
+      .orderBy(desc(deskInstances.createdAt))
+      .limit(1);
+
+    if (!row) return false;
+    return row.accountSyncedAt !== null && (row.syncedVersion ?? 0) >= row.userVersion;
+  });
+
+/**
+ * 改密 / 登录后的**非阻断**同步入口 —— 调用方 `void` 掉即可，绝不 await。
+ *
+ * 为什么非阻断：现有 `/auth/change-password` 的语义是「三端全成功才改平台密码」，
+ * 但 VM 端做不到这个保证（VM 可能离线、唤醒要一分钟）。若把它纳入同一条链，
+ * VM 一挂用户就改不了密码 —— 那是把可用性问题放大成账号安全问题。
+ *
+ * 为什么登录也要调：登录接口同样握有明文密码，这是**唯一能自动补上 A16 缺口**的
+ * 时刻。用户注册后首次登录 → 若桌面已建好但账号还没初始化，这里顺手补上，
+ * 用户不必经历「先改一次密码」的困惑；反之若同步成功过（版本一致）就跳过，
+ * 不重复跑 SSH。
+ */
+export const notifyVmPasswordChange = (userId: number, password: string): Promise<SyncAccountResult> => {
+  const previous = pendingSyncs.get(userId) ?? Promise.resolve(null as unknown as SyncAccountResult);
+  const next = previous
+    .catch(() => null)
+    .then(async () => (
+      (await isAccountCurrent(userId))
+        ? { ok: true, reason: null, host: null } as SyncAccountResult
+        : syncVmAccount(userId, password, { wake: true })
+    ))
+    .catch((error: unknown) => {
+      console.warn('[desktop] VM 账号同步异常 user=%s: %s', userId, error);
+      return { ok: false, reason: 'ssh_failed', host: null } as SyncAccountResult;
+    })
+    .then((result) => {
+      pendingSyncs.delete(userId);
+      if (!result.ok) {
+        console.warn('[desktop] VM 账号同步未完成 user=%s reason=%s host=%s',
+          userId, result.reason, result.host);
+      }
+      return result;
+    });
+
+  pendingSyncs.set(userId, next);
+  return next;
 };
 
 /** 回收：释放 IP 并解绑（供 recycle 任务使用） */

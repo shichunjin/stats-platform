@@ -12,6 +12,7 @@ import {
 import { createAccessToken } from '../auth/token.js';
 import { recordAudit } from '../audit.js';
 import { users, type User } from '../db/schema.js';
+import { isVmMode, notifyVmPasswordChange } from '../desktop/service.js';
 import { rememberLoginToken } from '../integrations/guac-token.js';
 import { upsertGuacUser } from '../integrations/guac.js';
 import { syncWindowsUser } from '../integrations/windows-account.js';
@@ -160,6 +161,11 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
         await rememberLoginToken(tokenDb, user.id, user.username, password);
       });
 
+      // 第四端（VM 本地账号）：登录是唯一还能拿到明文密码的自动化时机，
+      // 顺手补上 A16 的缺口（注册后首次登录即完成桌面账号初始化）。
+      // 已同步过（password_version 一致）时内部会直接跳过，不重复跑 SSH。**非阻断**。
+      if (isVmMode(user)) void notifyVmPasswordChange(user.id, password);
+
       return {
         access_token: createAccessToken({
           userId: user.id,
@@ -217,6 +223,11 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
       await app.withDb(async (tokenDb) => {
         await rememberLoginToken(tokenDb, user.id, user.username, newPassword);
       });
+
+      // 第四端：用户专属 VM 里的 Windows 本地账号（方案 A′）。
+      // **非阻断** —— VM 可能离线/挂起（唤醒要一分钟），绝不能让它卡住改密。
+      // 失败时 password_version 保持落后，下次开机把实例判成 awaiting_account 引导再改一次。
+      if (isVmMode(user)) void notifyVmPasswordChange(user.id, newPassword);
 
       return { message: '密码修改成功，Windows 云桌面与 Guacamole 登录密码已同步' };
     });

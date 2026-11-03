@@ -248,6 +248,28 @@ export const settingsSchema = z.object({
   /** 任务失败重试的退避基数（毫秒），实际间隔 = base * 2^(attempts-1)，上限 60s */
   desktopRetryBackoffMs: intFromEnv(2_000),
 
+  /** start 任务的总预算（等 running + 等 3389）：超时降级为 probing 交给 probe 任务 */
+  desktopStartTimeoutMs: intFromEnv(120_000),
+  /** 单次 TCP 探活超时 */
+  desktopProbeTimeoutMs: intFromEnv(3_000),
+  /** 连续失败几次触发自愈（reset）——方案 9.10 的「连续 N 次」 */
+  desktopProbeFailThreshold: intFromEnv(3),
+  /** 回收时优雅关机等待上限，超时降级硬 stop */
+  desktopShutdownTimeoutMs: intFromEnv(60_000),
+  /** 回收前是否打快照（失败不阻断回收） */
+  desktopRecycleSnapshot: boolFromEnv(true),
+  /** 改密时若 VM 处于挂起/关机，唤醒并等它起来的预算 */
+  desktopAccountSyncTimeoutMs: intFromEnv(90_000),
+
+  /** 空闲回收扫描器（7 天挂起 / 30 天销毁） */
+  desktopReaperEnabled: boolFromEnv(true),
+  desktopReaperIntervalMs: intFromEnv(600_000),
+  /** connected 超过这么久没有任何活动就视为已断开（Guacamole 没有会话结束回调） */
+  desktopConnectedGraceHours: intFromEnv(12),
+  /** 配额未配置时的兜底天数 */
+  desktopIdleSuspendDays: intFromEnv(7),
+  desktopIdleDestroyDays: intFromEnv(30),
+
   /** 桌面网段（IPAM）。留空 = 不启用静态 IP，依赖 Guest Agent 回读 */
   desktopSubnet: z.string().default(''),
   desktopGateway: z.string().default(''),
