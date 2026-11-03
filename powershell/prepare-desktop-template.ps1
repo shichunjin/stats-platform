@@ -166,6 +166,7 @@ Write-Host "      UserAuthentication=0（关 NLA）、SecurityLayer=1（协商 T
 Write-Host "      剪贴板/驱动器/打印机重定向已禁用" -ForegroundColor Green
 Write-Host "      注意：关 NLA 后后端 .env 必须是 GUAC_RDP_SECURITY=tls（配合 GUAC_RDP_IGNORE_CERT=true），" -ForegroundColor Yellow
 Write-Host "        否则 Guacamole 仍按 nla 发起协商，登录必然失败。" -ForegroundColor Yellow
+Write-Host "      注意：以上注册表改动要重启 TermService 才生效（脚本末尾会安排自动重启）。" -ForegroundColor Yellow
 
 # ============================================================
 # 4. 防火墙
@@ -262,6 +263,28 @@ if ($guestAgent.Count -gt 0) {
 }
 
 # ============================================================
+# 6.5 安排 TermService 重启（RDP 参数生效的前提）
+# ============================================================
+# UserAuthentication/SecurityLayer 等注册表值只在 TermService 重启后生效。
+# 脚本多半经 RDP 运行，直接 Restart-Service 会立刻掐断本会话（后续输出全部丢失），
+# 故注册一个 60 秒后执行的一次性计划任务：看完输出、记下提示，再等它自动断线重连。
+$TermServiceRestart = 'pending'
+Write-Host ""
+Write-Host " [6.5] 注册计划任务：60 秒后重启 TermService（RDP 参数生效，本会话将断开）" -ForegroundColor Yellow
+$restartTime = (Get-Date).AddSeconds(60).ToString('HH:mm:ss')
+$restartAction = 'powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "Restart-Service TermService -Force"'
+schtasks.exe /Create /TN 'StatsTemplate-RestartTermService' /TR $restartAction `
+    /SC ONCE /ST $restartTime /F /RL HIGHEST | Out-Null
+if ($LASTEXITCODE -eq 0) {
+    Write-Host "      已安排 $restartTime 重启 TermService，届时 RDP 会断开，稍后重连即可。" -ForegroundColor Green
+    Write-Host "      （重连后可删除任务：schtasks /Delete /TN StatsTemplate-RestartTermService /F）" -ForegroundColor DarkGray
+    $TermServiceRestart = 'scheduled'
+} else {
+    Write-Warning "计划任务注册失败，请手动执行：Restart-Service TermService -Force（或重启机器）"
+    $TermServiceRestart = 'manual_required'
+}
+
+# ============================================================
 # 7. 版本清单
 # ============================================================
 Write-Step "[7/7] 生成版本清单"
@@ -277,6 +300,7 @@ $checks = [ordered]@{
     openssh              = [bool]$OpenSshOk
     qemu_guest_agent     = $AgentOk
     nla_disabled         = $true
+    term_service_restart = $TermServiceRestart
     rdp_firewall_scoped  = ($GuacdSource.Count -gt 0)
     ssh_firewall_scoped  = ($PlatformSource.Count -gt 0)
 }
@@ -311,6 +335,8 @@ Write-Host " 2. 用一个测试账号登录一次（走 console 或 RDP），确
 Write-Host "      - W: 已映射、Z: 盘可读、$ResolvedServer\pending\<用户名> 快捷方式可见"
 Write-Host "      - 软件从桌面快捷方式启动后，另存为默认落在 W:"
 Write-Host " 3. 后端 .env 对齐： GUAC_RDP_SECURITY=tls + GUAC_RDP_IGNORE_CERT=true"
+Write-Host "    （TermService 重启后 RDP 参数才生效；若刚才没断线，手动执行：" -ForegroundColor Yellow
+Write-Host "      Restart-Service TermService -Force 或重启机器）" -ForegroundColor Yellow
 Write-Host " 4. 关机后转模板（Proxmox：右键 Convert to template），命令参考："
 Write-Host "      qm template <vmid>"
 Write-Host "    如需重新封装 SID（推荐首次制作时做一次）："
