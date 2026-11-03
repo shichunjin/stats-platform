@@ -169,6 +169,8 @@ npm run db:migrate-sqlite -- --sqlite ./stats_platform.db --pg-url "postgres://.
 | GET | `/results/mine` | 获取我的导出申请和已发布结果 | 登录 |
 | POST | `/results/request-export` | 申请导出结果（待管理员审核） | 登录 |
 | POST | `/results/{id}/download` | 下载已通过审核的结果文件 | 登录 |
+| POST | `/desktop/ensure` | 幂等申请专属云桌面（灰度关闭时返回 `mode=rds`，前端继续走 `/session/connect`） | 登录 |
+| GET | `/desktop/status` | 查询我的桌面状态（只读，不触发创建） | 登录 |
 | GET | `/admin/audit` | 查看审计日志 | 管理员 |
 | GET | `/admin/pending` | 查看待审核的导出申请 | 管理员 |
 | POST | `/admin/pending/{id}/approve` | 审核通过导出申请 | 管理员 |
@@ -176,6 +178,18 @@ npm run db:migrate-sqlite -- --sqlite ./stats_platform.db --pg-url "postgres://.
 | GET | `/admin/users` | 查看所有用户及其数据权限 | 管理员 |
 | GET | `/admin/scopes` | 查看所有数据范围（部门/项目） | 管理员 |
 | PUT | `/admin/users/{id}/scopes` | 分配用户数据权限（部门+项目范围） | 管理员 |
+| GET | `/admin/desktops` | 桌面实例列表（user/vm/模板/配额/最近任务折叠成一行） | 管理员 |
+| GET | `/admin/desktop-tasks` | 桌面任务队列（排查卡单：attempts、error_message、下次重试时间） | 管理员 |
+| POST | `/admin/desktops/{id}/suspend` | 强制挂起实例（入队，返回 `task_id`） | 管理员 |
+| POST | `/admin/desktops/{id}/recycle` | 强制回收（销毁 VM、保留实例行） | 管理员 |
+| POST | `/admin/desktops/{id}/probe` | 立即探活（与自动探测同分钟去重） | 管理员 |
+| POST | `/admin/desktop-tasks/{id}/retry` | 重跑 **failed** 任务（attempts 归零） | 管理员 |
+| GET | `/admin/desktop-templates` | 桌面模板列表（只读，模板本身在 Proxmox 侧建） | 管理员 |
+| GET/PUT | `/admin/desktop-quotas` | 配额读写（规格分档的唯一入口） | 管理员 |
+
+> 云桌面相关接口**不看灰度开关**：`desktopEnabled=false` 只挡用户的 `/desktop/ensure`，
+> 管理端必须始终可用，否则关开关就留下一堆无人收尾的 VM。详见
+> `docs/multi-vm-desktop-plan.md` 6.4 与 A26。
 
 ## 数据库表
 

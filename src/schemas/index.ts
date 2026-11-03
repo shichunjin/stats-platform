@@ -14,7 +14,8 @@
 import { extendZodWithOpenApi } from '@asteasolutions/zod-to-openapi';
 import { z } from 'zod';
 import type {
-  AuditLog, DataApply, ExportResult, Message, PendingFile, RemoteSession, User,
+  AuditLog, DataApply, DeskInstance, DesktopQuota, DesktopTask, DesktopTemplate, DesktopVm,
+  ExportResult, Message, PendingFile, RemoteSession, User,
 } from '../db/schema.js';
 import { filterMapOutSchema, filterMapSchema } from './filters.js';
 
@@ -369,6 +370,246 @@ export const toDesktopEnsureOut = (outcome: {
 });
 
 /* ================================================================
+ * 云桌面：管理端（/admin/desktops/*）—— docs/multi-vm-desktop-plan.md 6.6
+ *
+ * 一律**扁平**输出（不嵌套对象）：出向 schema 由 fast-json-stringify 序列化，
+ * 嵌套对象里任何一个字段与 schema 不符都会让整个端点 500；扁平字段少一层出错概率。
+ * ================================================================ */
+
+/** 任务列表项（运维排查用：看得到 attempts / error_message / 下次重试时间） */
+export const desktopTaskOutSchema = z.object({
+  id: z.number().int().openapi({ description: '任务 ID' }),
+  task_key: z.string().openapi({ description: '幂等键（重复入队会命中它）' }),
+  type: z.string().openapi({ description: 'create/start/probe/suspend/recycle…' }),
+  status: z.string().openapi({ description: 'pending/running/success/failed/error/cancelled' }),
+  stage: z.string().nullable().openapi({ description: '阶段（clone/boot/probe…，仅展示用）' }),
+  progress: z.number().int().openapi({ description: '进度 0-100' }),
+  attempts: z.number().int().openapi({ description: '已尝试次数' }),
+  max_attempts: z.number().int().openapi({ description: '最大尝试次数，达到即 failed' }),
+  instance_id: z.number().int().nullable(),
+  user_id: z.number().int().nullable(),
+  error_code: z.string().nullable(),
+  error_message: z.string().nullable().openapi({ description: '失败原因（已截断到 2000 字符）' }),
+  not_before: isoDateTimeSchema.nullable().openapi({ description: '最早可执行时间（退避到期点）' }),
+  created_at: isoDateTimeSchema.nullable(),
+  started_at: isoDateTimeSchema.nullable(),
+  finished_at: isoDateTimeSchema.nullable(),
+});
+
+/** 实例列表项：把 user/vm/template/quota/最近任务 折叠成一行，管理端一次拿全 */
+export const desktopAdminOutSchema = z.object({
+  id: z.number().int().openapi({ description: '桌面实例 ID' }),
+  user_id: z.number().int(),
+  username: z.string(),
+  desktop_mode: z.string().openapi({ description: '用户级灰度开关：rds / vm' }),
+  desktop_enabled: z.boolean().openapi({ description: '用户级启用标记' }),
+  status: z.string().openapi({ description: '实例状态（见 DeskInstanceStatus）' }),
+  spec_vcpu: z.number().int().nullable().openapi({ description: '分配规格（模板基线或配额覆盖）' }),
+  spec_memory_mb: z.number().int().nullable(),
+  account_synced_at: isoDateTimeSchema.nullable()
+    .openapi({ description: 'Windows 账号同步时间；null + status=awaiting_account 表示还没初始化' }),
+  vm_id: z.number().int().nullable(),
+  vm_name: z.string().nullable(),
+  vm_ip: z.string().nullable(),
+  provider_ref: z.string().nullable().openapi({ description: '<node>/<vmid>' }),
+  provider_node: z.string().nullable(),
+  power_state: z.string().nullable().openapi({ description: 'running/stopped/suspended/unknown' }),
+  agent_ready: z.boolean().nullable(),
+  rdp_port: z.number().int().nullable(),
+  template_code: z.string().nullable(),
+  quota_code: z.string().nullable(),
+  connect_count: z.number().int(),
+  rebuild_count: z.number().int(),
+  last_connected_at: isoDateTimeSchema.nullable(),
+  last_disconnected_at: isoDateTimeSchema.nullable(),
+  last_error: z.string().nullable(),
+  last_error_at: isoDateTimeSchema.nullable(),
+  created_at: isoDateTimeSchema.nullable(),
+  updated_at: isoDateTimeSchema.nullable(),
+  task_id: z.number().int().nullable().openapi({ description: '该实例最近一条任务 ID' }),
+  task_type: z.string().nullable(),
+  task_status: z.string().nullable(),
+  task_stage: z.string().nullable(),
+  task_progress: z.number().int().nullable(),
+  task_error: z.string().nullable(),
+});
+
+/** 管理端动作（挂起/回收/探活/重试）的统一回执 */
+export const desktopActionOutSchema = z.object({
+  message: z.string(),
+  task_id: z.number().int().nullable().openapi({ description: '入队的任务 ID；null = 未产生任务' }),
+  created: z.boolean().openapi({ description: 'false = 同一分钟内的重复操作，命中幂等键未重复入队' }),
+});
+
+export const desktopTemplateOutSchema = z.object({
+  id: z.number().int(),
+  code: z.string(),
+  name: z.string(),
+  os_type: z.string(),
+  os_version: z.string().nullable(),
+  provider: z.string(),
+  provider_ref: z.string(),
+  provider_node: z.string().nullable(),
+  vcpu: z.number().int().openapi({ description: '基线 vCPU（可被配额 default_vcpu 覆盖）' }),
+  memory_mb: z.number().int(),
+  disk_gb: z.number().int().openapi({ description: '磁盘下限（只能扩不能缩）' }),
+  storage: z.string().nullable(),
+  network_bridge: z.string().nullable(),
+  vlan_id: z.number().int().nullable(),
+  guest_username: z.string().nullable(),
+  software_registry_ver: z.string().nullable(),
+  login_script_ver: z.string().nullable().openapi({ description: '对应 VM 上 template-manifest.json' }),
+  status: z.string(),
+  is_default: z.boolean(),
+  max_instances: z.number().int().nullable(),
+  created_at: isoDateTimeSchema.nullable(),
+  updated_at: isoDateTimeSchema.nullable(),
+});
+
+export const desktopQuotaOutSchema = z.object({
+  id: z.number().int(),
+  code: z.string(),
+  name: z.string(),
+  default_vcpu: z.number().int().nullable().openapi({ description: 'null = 取模板基线' }),
+  default_memory_mb: z.number().int().nullable(),
+  max_vcpu: z.number().int(),
+  max_memory_mb: z.number().int(),
+  max_disk_gb: z.number().int(),
+  max_instances: z.number().int(),
+  max_daily_hours: z.number().nullable().openapi({ description: '每日最长使用时长；null = 不限' }),
+  max_idle_days: z.number().int().openapi({ description: '空闲挂起天数' }),
+  rebuild_after_days: z.number().int(),
+  destroy_after_idle_days: z.number().int().openapi({ description: '空闲销毁天数' }),
+  allow_rebuild: z.boolean(),
+  template_id: z.number().int().nullable(),
+  created_at: isoDateTimeSchema.nullable(),
+  updated_at: isoDateTimeSchema.nullable(),
+});
+
+export const toDesktopTaskOut = (row: DesktopTask): z.infer<typeof desktopTaskOutSchema> => ({
+  id: row.id,
+  task_key: row.taskKey,
+  type: row.type,
+  status: row.status,
+  stage: row.stage ?? null,
+  progress: row.progress,
+  attempts: row.attempts,
+  max_attempts: row.maxAttempts,
+  instance_id: row.instanceId ?? null,
+  user_id: row.userId ?? null,
+  error_code: row.errorCode ?? null,
+  error_message: row.errorMessage ?? null,
+  not_before: toIso(row.notBefore),
+  created_at: toIso(row.createdAt),
+  started_at: toIso(row.startedAt),
+  finished_at: toIso(row.finishedAt),
+});
+
+export const toDesktopAdminOut = (
+  row: {
+    readonly instance: DeskInstance;
+    readonly username: string;
+    readonly desktopMode: string;
+    readonly desktopEnabled: boolean;
+    readonly vm: DesktopVm | null;
+    readonly templateCode: string | null;
+    readonly quotaCode: string | null;
+  },
+  latestTask: DesktopTask | null,
+): z.infer<typeof desktopAdminOutSchema> => {
+  const { instance, vm } = row;
+  return {
+    id: instance.id,
+    user_id: instance.userId,
+    username: row.username,
+    desktop_mode: row.desktopMode,
+    desktop_enabled: row.desktopEnabled,
+    status: instance.status,
+    spec_vcpu: instance.specVcpu ?? null,
+    spec_memory_mb: instance.specMemoryMb ?? null,
+    account_synced_at: toIso(instance.accountSyncedAt),
+    vm_id: vm?.id ?? null,
+    vm_name: vm?.name ?? null,
+    vm_ip: vm?.primaryIp ?? null,
+    provider_ref: vm?.providerRef ?? null,
+    provider_node: vm?.providerNode ?? null,
+    power_state: vm?.powerState ?? null,
+    agent_ready: vm?.agentReady ?? null,
+    rdp_port: vm?.rdpPort ?? null,
+    template_code: row.templateCode,
+    quota_code: row.quotaCode,
+    connect_count: instance.connectCount,
+    rebuild_count: instance.rebuildCount,
+    last_connected_at: toIso(instance.lastConnectedAt),
+    last_disconnected_at: toIso(instance.lastDisconnectedAt),
+    last_error: instance.lastError ?? null,
+    last_error_at: toIso(instance.lastErrorAt),
+    created_at: toIso(instance.createdAt),
+    updated_at: toIso(instance.updatedAt),
+    task_id: latestTask?.id ?? null,
+    task_type: latestTask?.type ?? null,
+    task_status: latestTask?.status ?? null,
+    task_stage: latestTask?.stage ?? null,
+    task_progress: latestTask?.progress ?? null,
+    task_error: latestTask?.errorMessage ?? null,
+  };
+};
+
+export const toDesktopTemplateOut = (
+  row: DesktopTemplate,
+): z.infer<typeof desktopTemplateOutSchema> => ({
+  id: row.id,
+  code: row.code,
+  name: row.name,
+  os_type: row.osType,
+  os_version: row.osVersion ?? null,
+  provider: row.provider,
+  provider_ref: row.providerRef,
+  provider_node: row.providerNode ?? null,
+  vcpu: row.vcpu,
+  memory_mb: row.memoryMb,
+  disk_gb: row.diskGb,
+  storage: row.storage ?? null,
+  network_bridge: row.networkBridge ?? null,
+  vlan_id: row.vlanId ?? null,
+  guest_username: row.guestUsername ?? null,
+  software_registry_ver: row.softwareRegistryVer ?? null,
+  login_script_ver: row.loginScriptVer ?? null,
+  status: row.status,
+  is_default: row.isDefault,
+  max_instances: row.maxInstances ?? null,
+  created_at: toIso(row.createdAt),
+  updated_at: toIso(row.updatedAt),
+});
+
+/**
+ * ⚠️ `max_daily_hours` 是 pg `numeric`，drizzle 0.33 没有 mode 选项，读出来是 **string**。
+ * 必须在这里 Number() 收敛：出向 schema 声明的是 number，直接把字符串交给
+ * fast-json-stringify 会抛 TypeError → 整个端点 500（本项目踩过同类坑）。
+ */
+export const toDesktopQuotaOut = (
+  row: DesktopQuota,
+): z.infer<typeof desktopQuotaOutSchema> => ({
+  id: row.id,
+  code: row.code,
+  name: row.name,
+  default_vcpu: row.defaultVcpu ?? null,
+  default_memory_mb: row.defaultMemoryMb ?? null,
+  max_vcpu: row.maxVcpu,
+  max_memory_mb: row.maxMemoryMb,
+  max_disk_gb: row.maxDiskGb,
+  max_instances: row.maxInstances,
+  max_daily_hours: row.maxDailyHours === null ? null : Number(row.maxDailyHours),
+  max_idle_days: row.maxIdleDays,
+  rebuild_after_days: row.rebuildAfterDays,
+  destroy_after_idle_days: row.destroyAfterIdleDays,
+  allow_rebuild: row.allowRebuild,
+  template_id: row.templateId ?? null,
+  created_at: toIso(row.createdAt),
+  updated_at: toIso(row.updatedAt),
+});
+
+/* ================================================================
  * wire 类型
  * ================================================================ */
 
@@ -385,3 +626,8 @@ export type UserOut = z.infer<typeof userOutSchema>;
 export type SessionOut = z.infer<typeof sessionOutSchema>;
 export type RegisterResponse = z.infer<typeof registerResponseSchema>;
 export type TokenResponse = z.infer<typeof tokenResponseSchema>;
+export type DesktopAdminOut = z.infer<typeof desktopAdminOutSchema>;
+export type DesktopTaskOut = z.infer<typeof desktopTaskOutSchema>;
+export type DesktopActionOut = z.infer<typeof desktopActionOutSchema>;
+export type DesktopTemplateOut = z.infer<typeof desktopTemplateOutSchema>;
+export type DesktopQuotaOut = z.infer<typeof desktopQuotaOutSchema>;

@@ -27,6 +27,7 @@ import { appliesRoutes } from './routers/applies.js';
 import { authRoutes } from './routers/auth.js';
 import { dataRoutes } from './routers/data.js';
 import { desktopRoutes } from './routers/desktop.js';
+import { desktopAdminRoutes } from './routers/desktop-admin.js';
 import { messageRoutes } from './routers/messages.js';
 import { resultsRoutes } from './routers/results.js';
 import { sessionRoutes } from './routers/session.js';
@@ -169,6 +170,7 @@ export const buildApp = async (options: BuildOptions = {}): Promise<FastifyInsta
   await app.register(messageRoutes);
   await app.register(appliesRoutes);
   await app.register(desktopRoutes);
+  await app.register(desktopAdminRoutes);
 
   app.get('/health', async () => ({ status: 'ok' }));
 

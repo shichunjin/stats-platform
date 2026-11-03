@@ -1,0 +1,462 @@
+/**
+ * 云桌面管理端路由 —— docs/multi-vm-desktop-plan.md 6.6 / 7.2 / 7.6 / 7.8
+ *
+ * 面向运维：只做「看清楚 + 强制干预」，不做业务开通（那是 `/desktop/ensure`）。
+ *
+ *   GET  /admin/desktops                     实例列表（含 VM/模板/配额/最近任务，一行看全）
+ *   GET  /admin/desktop-tasks                任务队列（排查卡单的第一入口）
+ *   POST /admin/desktops/:instance_id/suspend  强制挂起
+ *   POST /admin/desktops/:instance_id/recycle  强制回收（销毁 VM，保留实例行）
+ *   POST /admin/desktops/:instance_id/probe    立即探活
+ *   POST /admin/desktop-tasks/:task_id/retry   重跑失败任务
+ *   GET  /admin/desktop-templates            模板列表（只读：模板在 Proxmox 侧建，这里只是登记）
+ *   GET  /admin/desktop-quotas               配额列表
+ *   PUT  /admin/desktop-quotas/:quota_id     改配额（规格分档的唯一入口）
+ *
+ * 两条刻意的设计：
+ *  1. **不看灰度开关**。`desktopEnabled=false` 时用户的 `/desktop/ensure` 会被挡掉，
+ *     但运维仍要能收尾存量 VM（强制回收、重跑卡住的任务）—— 否则一关开关就留下孤儿 VM。
+ *  2. **动作一律入队，不同步执行**。克隆/关机是分钟级，HTTP 里同步做必然超时；
+ *     这里只负责「可靠地排进 `desktop_tasks`」，执行交给 worker。
+ */
+import { and, asc, desc, eq, inArray } from 'drizzle-orm';
+import type { FastifyPluginAsync, FastifyRequest } from 'fastify';
+import { z } from 'zod';
+import { recordAudit } from '../audit.js';
+import { HttpError, authenticate, requireAdmin } from '../auth/guards.js';
+import {
+  deskInstances, desktopQuotas, desktopTemplates, desktopTasks, desktopVms, users,
+  type DeskInstanceStatus, type DesktopTask, type User,
+} from '../db/schema.js';
+import { enqueueTask } from '../desktop/queue.js';
+import { asRouteSchema } from '../plugins/validator.js';
+import {
+  desktopActionOutSchema,
+  desktopAdminOutSchema,
+  desktopQuotaOutSchema,
+  desktopTaskOutSchema,
+  desktopTemplateOutSchema,
+  toDesktopAdminOut,
+  toDesktopQuotaOut,
+  toDesktopTaskOut,
+  toDesktopTemplateOut,
+} from '../schemas/index.js';
+import { getClientIp } from '../security/rate-limit.js';
+
+const paginationSchema = z.object({
+  skip: z.coerce.number().int().min(0).default(0)
+    .openapi({ description: '跳过条数' }),
+  limit: z.coerce.number().int().min(1).max(200).default(50)
+    .openapi({ description: '返回条数上限（最大 200）' }),
+});
+
+const instanceQuerySchema = paginationSchema.extend({
+  status: z.string().optional().openapi({ description: '按实例状态过滤（new/ready/idle/destroyed…）' }),
+  user_id: z.coerce.number().int().positive().optional()
+    .openapi({ description: '按用户过滤' }),
+  desktop_mode: z.enum(['rds', 'vm']).optional()
+    .openapi({ description: '按用户灰度模式过滤' }),
+});
+
+const taskQuerySchema = paginationSchema.extend({
+  status: z.string().optional().openapi({ description: 'pending/running/success/failed/error/cancelled' }),
+  type: z.string().optional().openapi({ description: 'create/start/probe/suspend/recycle…' }),
+  instance_id: z.coerce.number().int().positive().optional(),
+});
+
+const instanceParamsSchema = z.object({
+  instance_id: z.coerce.number().int().positive().openapi({ description: '桌面实例 ID' }),
+}).strict();
+
+const taskParamsSchema = z.object({
+  task_id: z.coerce.number().int().positive().openapi({ description: '任务 ID' }),
+}).strict();
+
+const quotaParamsSchema = z.object({
+  quota_id: z.coerce.number().int().positive().openapi({ description: '配额 ID' }),
+}).strict();
+
+/**
+ * 配额更新：全部可选（PBUT 语义），null 表示「恢复为取模板基线」（仅 default_* 有意义）。
+ * 上限类字段不允许置 null —— 那等同于取消限制，很容易误操作。
+ */
+const quotaUpdateSchema = z.object({
+  default_vcpu: z.number().int().min(1).max(128).nullable().optional(),
+  default_memory_mb: z.number().int().min(512).max(262_144).nullable().optional(),
+  max_vcpu: z.number().int().min(1).max(128).optional(),
+  max_memory_mb: z.number().int().min(512).max(262_144).optional(),
+  max_disk_gb: z.number().int().min(20).max(4_096).optional(),
+  max_instances: z.number().int().min(1).max(10).optional(),
+  max_daily_hours: z.number().min(0).max(24).nullable().optional(),
+  max_idle_days: z.number().int().min(1).max(365).optional(),
+  rebuild_after_days: z.number().int().min(1).max(1_825).optional(),
+  destroy_after_idle_days: z.number().int().min(1).max(365).optional(),
+  allow_rebuild: z.boolean().optional(),
+  template_id: z.number().int().positive().nullable().optional(),
+}).strict();
+
+/** 可挂起的状态：只有「真的跑着或可连」的实例才值得挂起，其余状态入队只会白跑一次 */
+const SUSPENDABLE: readonly DeskInstanceStatus[] = [
+  'ready', 'connected', 'idle', 'awaiting_account',
+];
+
+/** 可回收：除终态（destroyed/error）外的全部状态 —— 卡在 provisioning 的僵尸实例也该能清掉 */
+const RECYCLABLE: readonly DeskInstanceStatus[] = [
+  'new', 'provisioning', 'configuring', 'booting', 'probing',
+  'ready', 'awaiting_account', 'connected', 'idle', 'suspended', 'failed',
+];
+
+type ActionKind = 'suspend' | 'recycle' | 'probe';
+
+/** 分钟级时间戳：同一次点击重复提交会被 task_key 幂等掉，但隔一分钟可以再来一次 */
+const minuteKey = (): number => Math.floor(Date.now() / 60_000);
+
+const assertInstanceStatus = (
+  status: DeskInstanceStatus,
+  action: ActionKind,
+): void => {
+  if (action === 'probe') return;
+  const allowed = action === 'suspend' ? SUSPENDABLE : RECYCLABLE;
+  if (!allowed.includes(status)) {
+    throw new HttpError(400, `实例当前状态 ${status} 不支持「${action}」，请先刷新确认`);
+  }
+};
+
+const ACTION_LABEL: Readonly<Record<ActionKind, string>> = {
+  suspend: '挂起',
+  recycle: '回收（销毁 VM）',
+  probe: '探活',
+};
+
+export const desktopAdminRoutes: FastifyPluginAsync = async (app) => {
+  /* ---------------- 实例列表 ---------------- */
+
+  app.get<{ Querystring: z.infer<typeof instanceQuerySchema> }>('/admin/desktops', {
+    schema: asRouteSchema({
+      querystring: instanceQuerySchema,
+      response: { 200: z.array(desktopAdminOutSchema) },
+    }),
+    preHandler: [authenticate, requireAdmin],
+  }, async (request) => {
+    const {
+      skip, limit, status, user_id: userId, desktop_mode: desktopMode,
+    } = request.query;
+
+    return app.withDb(async (db) => {
+      const filters = [
+        status ? eq(deskInstances.status, status as DeskInstanceStatus) : undefined,
+        userId === undefined ? undefined : eq(deskInstances.userId, userId),
+        desktopMode === undefined ? undefined : eq(users.desktopMode, desktopMode),
+      ].filter((clause): clause is NonNullable<typeof clause> => clause !== undefined);
+
+      const rows = await db.db.select({
+        instance: deskInstances,
+        user: users,
+        vm: desktopVms,
+        template: desktopTemplates,
+        quota: desktopQuotas,
+      }).from(deskInstances)
+        .innerJoin(users, eq(users.id, deskInstances.userId))
+        .leftJoin(desktopVms, eq(desktopVms.id, deskInstances.currentVmId))
+        .leftJoin(desktopTemplates, eq(desktopTemplates.id, deskInstances.templateId))
+        .leftJoin(desktopQuotas, eq(desktopQuotas.id, deskInstances.quotaId))
+        .where(filters.length > 0 ? and(...filters) : undefined)
+        .orderBy(desc(deskInstances.updatedAt))
+        .offset(skip)
+        .limit(limit);
+
+      // 批量取每个实例的「最近一条任务」：一次 IN 查询再在内存里折叠，
+      // 而不是给每行写相关子查询 —— 列表页最多 200 行，避免 N+1 拖死管理页。
+      const latest = new Map<number, DesktopTask>();
+      if (rows.length > 0) {
+        const tasks = await db.db.select().from(desktopTasks)
+          .where(inArray(desktopTasks.instanceId, rows.map((row) => row.instance.id)))
+          .orderBy(desc(desktopTasks.id));
+        // 按 id 倒序扫一遍，第一次见到的就是该实例最新的
+        for (const task of tasks) {
+          if (task.instanceId !== null && !latest.has(task.instanceId)) {
+            latest.set(task.instanceId, task);
+          }
+        }
+      }
+
+      return rows.map((row) => toDesktopAdminOut({
+        instance: row.instance,
+        username: row.user.username,
+        desktopMode: row.user.desktopMode,
+        desktopEnabled: row.user.desktopEnabled,
+        vm: row.vm ?? null,
+        templateCode: row.template?.code ?? null,
+        quotaCode: row.quota?.code ?? null,
+      }, latest.get(row.instance.id) ?? null));
+    });
+  });
+
+  /* ---------------- 任务队列 ---------------- */
+
+  app.get<{ Querystring: z.infer<typeof taskQuerySchema> }>('/admin/desktop-tasks', {
+    schema: asRouteSchema({
+      querystring: taskQuerySchema,
+      response: { 200: z.array(desktopTaskOutSchema) },
+    }),
+    preHandler: [authenticate, requireAdmin],
+  }, async (request) => {
+    const {
+      skip, limit, status, type, instance_id: instanceId,
+    } = request.query;
+
+    return app.withDb(async (db) => {
+      const filters = [
+        status ? eq(desktopTasks.status, status as DesktopTask['status']) : undefined,
+        type ? eq(desktopTasks.type, type as DesktopTask['type']) : undefined,
+        instanceId === undefined ? undefined : eq(desktopTasks.instanceId, instanceId),
+      ].filter((clause): clause is NonNullable<typeof clause> => clause !== undefined);
+
+      const rows = await db.db.select().from(desktopTasks)
+        .where(filters.length > 0 ? and(...filters) : undefined)
+        .orderBy(desc(desktopTasks.id))
+        .offset(skip)
+        .limit(limit);
+
+      return rows.map(toDesktopTaskOut);
+    });
+  });
+
+  /* ---------------- 实例动作（挂起 / 回收 / 探活） ---------------- */
+
+  const handleAction = async (
+    request: FastifyRequest<{ Params: z.infer<typeof instanceParamsSchema> }>,
+    action: ActionKind,
+  ): Promise<z.infer<typeof desktopActionOutSchema>> => {
+    const admin = request.user as User;
+    const clientIp = getClientIp(request);
+    const { instance_id: instanceId } = request.params;
+
+    const instance = await app.withDb(async (db) => {
+      const [row] = await db.db.select().from(deskInstances)
+        .where(eq(deskInstances.id, instanceId)).limit(1);
+      return row ?? null;
+    });
+    if (instance === null) throw new HttpError(404, '桌面实例不存在');
+
+    assertInstanceStatus(instance.status, action);
+
+    // 探活复用 worker 自己的幂等键格式（probe:instance:<id>:<minute>），
+    // 与自动探测天然去重：同一分钟内点两次只会有一个 probe 任务。
+    const taskKey = action === 'probe'
+      ? `probe:instance:${instanceId}:${minuteKey()}`
+      : `admin:${action}:instance:${instanceId}:${minuteKey()}`;
+
+    const outcome = await enqueueTask({
+      taskKey,
+      type: action,
+      instanceId,
+      userId: instance.userId,
+    });
+
+    await app.withDb(async (db) => {
+      await recordAudit(db, {
+        userId: admin.id,
+        action: `desktop_admin_${action}`,
+        detail: `管理员 ${admin.username} ${ACTION_LABEL[action]}桌面 instance_id=${instanceId}`
+          + `（状态 ${instance.status}，task=${outcome.created ? outcome.id : '幂等命中'}）`,
+        ipAddr: clientIp,
+      });
+      await db.commit();
+    });
+
+    return {
+      message: outcome.created
+        ? `已受理${ACTION_LABEL[action]}，稍后刷新状态`
+        : `${ACTION_LABEL[action]}任务已在本分钟内排队，未重复提交`,
+      task_id: outcome.created ? outcome.id : null,
+      created: outcome.created,
+    };
+  };
+
+  app.post<{ Params: z.infer<typeof instanceParamsSchema> }>('/admin/desktops/:instance_id/suspend', {
+    schema: asRouteSchema({
+      params: instanceParamsSchema,
+      response: { 200: desktopActionOutSchema },
+    }),
+    preHandler: [authenticate, requireAdmin],
+  }, async (request) => handleAction(request, 'suspend'));
+
+  app.post<{ Params: z.infer<typeof instanceParamsSchema> }>('/admin/desktops/:instance_id/recycle', {
+    schema: asRouteSchema({
+      params: instanceParamsSchema,
+      response: { 200: desktopActionOutSchema },
+    }),
+    preHandler: [authenticate, requireAdmin],
+  }, async (request) => handleAction(request, 'recycle'));
+
+  app.post<{ Params: z.infer<typeof instanceParamsSchema> }>('/admin/desktops/:instance_id/probe', {
+    schema: asRouteSchema({
+      params: instanceParamsSchema,
+      response: { 200: desktopActionOutSchema },
+    }),
+    preHandler: [authenticate, requireAdmin],
+  }, async (request) => handleAction(request, 'probe'));
+
+  /* ---------------- 重跑失败任务 ---------------- */
+
+  app.post<{ Params: z.infer<typeof taskParamsSchema> }>('/admin/desktop-tasks/:task_id/retry', {
+    schema: asRouteSchema({
+      params: taskParamsSchema,
+      response: { 200: desktopTaskOutSchema },
+    }),
+    preHandler: [authenticate, requireAdmin],
+  }, async (request) => {
+    const admin = request.user as User;
+    const clientIp = getClientIp(request);
+    const { task_id: taskId } = request.params;
+
+    return app.withDb(async (db) => {
+      const [task] = await db.db.select().from(desktopTasks)
+        .where(eq(desktopTasks.id, taskId)).for('update').limit(1);
+      if (task === undefined) throw new HttpError(404, '任务不存在');
+
+      // 只允许重跑 failed：pending/running 的任务重跑会与 worker 抢同一条记录
+      if (task.status !== 'failed') {
+        throw new HttpError(400, `只有 failed 的任务可以重跑（当前 ${task.status}）`);
+      }
+
+      // attempts 归零：运维已确认要再试一轮，不该被历史尝试次数立刻打到 failed
+      const [updated] = await db.db.update(desktopTasks).set({
+        status: 'pending',
+        stage: null,
+        progress: 0,
+        attempts: 0,
+        notBefore: new Date(),
+        errorCode: null,
+        errorMessage: null,
+        startedAt: null,
+        finishedAt: null,
+      }).where(eq(desktopTasks.id, taskId)).returning();
+
+      await recordAudit(db, {
+        userId: admin.id,
+        action: 'desktop_task_retry',
+        detail: `管理员 ${admin.username} 重跑任务 id=${taskId} type=${task.type}`
+          + `（原错误 ${task.errorCode ?? '-'}: ${(task.errorMessage ?? '').slice(0, 200)}）`,
+        ipAddr: clientIp,
+      });
+      await db.commit();
+
+      return toDesktopTaskOut(updated ?? task);
+    });
+  });
+
+  /* ---------------- 模板（只读） ---------------- */
+
+  app.get('/admin/desktop-templates', {
+    schema: asRouteSchema({ response: { 200: z.array(desktopTemplateOutSchema) } }),
+    preHandler: [authenticate, requireAdmin],
+  }, async () => app.withDb(async (db) => {
+    const rows = await db.db.select().from(desktopTemplates).orderBy(asc(desktopTemplates.id));
+    return rows.map(toDesktopTemplateOut);
+  }));
+
+  /* ---------------- 配额（规格分档的唯一入口） ---------------- */
+
+  app.get('/admin/desktop-quotas', {
+    schema: asRouteSchema({ response: { 200: z.array(desktopQuotaOutSchema) } }),
+    preHandler: [authenticate, requireAdmin],
+  }, async () => app.withDb(async (db) => {
+    const rows = await db.db.select().from(desktopQuotas).orderBy(asc(desktopQuotas.id));
+    return rows.map(toDesktopQuotaOut);
+  }));
+
+  app.put<{
+    Params: z.infer<typeof quotaParamsSchema>;
+    Body: z.infer<typeof quotaUpdateSchema>;
+  }>('/admin/desktop-quotas/:quota_id', {
+    schema: asRouteSchema({
+      params: quotaParamsSchema,
+      body: quotaUpdateSchema,
+      response: { 200: desktopQuotaOutSchema },
+    }),
+    preHandler: [authenticate, requireAdmin],
+  }, async (request) => {
+    const admin = request.user as User;
+    const clientIp = getClientIp(request);
+    const { quota_id: quotaId } = request.params;
+    const { body } = request;
+
+    return app.withDb(async (db) => {
+      const [quota] = await db.db.select().from(desktopQuotas)
+        .where(eq(desktopQuotas.id, quotaId)).for('update').limit(1);
+      if (quota === undefined) throw new HttpError(404, '配额不存在');
+
+      // 先合并再校验：只改一个字段时，跨字段约束（default ≤ max）必须对**合并后**的值成立
+      const next = {
+        defaultVcpu: body.default_vcpu === undefined ? quota.defaultVcpu : body.default_vcpu,
+        defaultMemoryMb: body.default_memory_mb === undefined
+          ? quota.defaultMemoryMb : body.default_memory_mb,
+        maxVcpu: body.max_vcpu ?? quota.maxVcpu,
+        maxMemoryMb: body.max_memory_mb ?? quota.maxMemoryMb,
+        maxDiskGb: body.max_disk_gb ?? quota.maxDiskGb,
+        maxInstances: body.max_instances ?? quota.maxInstances,
+        maxDailyHours: body.max_daily_hours === undefined
+          ? quota.maxDailyHours : body.max_daily_hours,
+        maxIdleDays: body.max_idle_days ?? quota.maxIdleDays,
+        rebuildAfterDays: body.rebuild_after_days ?? quota.rebuildAfterDays,
+        destroyAfterIdleDays: body.destroy_after_idle_days ?? quota.destroyAfterIdleDays,
+        allowRebuild: body.allow_rebuild ?? quota.allowRebuild,
+        templateId: body.template_id === undefined ? quota.templateId : body.template_id,
+      };
+
+      if (next.defaultVcpu !== null && next.defaultVcpu > next.maxVcpu) {
+        throw new HttpError(422, `default_vcpu(${next.defaultVcpu}) 不能大于 max_vcpu(${next.maxVcpu})`);
+      }
+      if (next.defaultMemoryMb !== null && next.defaultMemoryMb > next.maxMemoryMb) {
+        throw new HttpError(
+          422,
+          `default_memory_mb(${next.defaultMemoryMb}) 不能大于 max_memory_mb(${next.maxMemoryMb})`,
+        );
+      }
+      // 销毁早于挂起等于「还没挂就先删了」，reaper 会按天数各算一遍，语义上必须有序
+      if (next.destroyAfterIdleDays < next.maxIdleDays) {
+        throw new HttpError(
+          422,
+          `destroy_after_idle_days(${next.destroyAfterIdleDays}) 不能小于 max_idle_days(${next.maxIdleDays})`,
+        );
+      }
+      if (next.templateId !== null) {
+        const [template] = await db.db.select({ id: desktopTemplates.id }).from(desktopTemplates)
+          .where(eq(desktopTemplates.id, next.templateId)).limit(1);
+        if (template === undefined) throw new HttpError(422, '绑定模板不存在');
+      }
+
+      const [updated] = await db.db.update(desktopQuotas).set({
+        defaultVcpu: next.defaultVcpu,
+        defaultMemoryMb: next.defaultMemoryMb,
+        maxVcpu: next.maxVcpu,
+        maxMemoryMb: next.maxMemoryMb,
+        maxDiskGb: next.maxDiskGb,
+        maxInstances: next.maxInstances,
+        // numeric 列：drizzle 读写都是 string，写入时显式转
+        maxDailyHours: next.maxDailyHours === null ? null : String(next.maxDailyHours),
+        maxIdleDays: next.maxIdleDays,
+        rebuildAfterDays: next.rebuildAfterDays,
+        destroyAfterIdleDays: next.destroyAfterIdleDays,
+        allowRebuild: next.allowRebuild,
+        templateId: next.templateId,
+        updatedAt: new Date(),
+      }).where(eq(desktopQuotas.id, quotaId)).returning();
+
+      await recordAudit(db, {
+        userId: admin.id,
+        action: 'desktop_quota_update',
+        detail: `管理员 ${admin.username} 更新配额 ${quota.code}: `
+          + `spec=${next.defaultVcpu ?? '模板'}/${next.defaultMemoryMb ?? '模板'} `
+          + `max=${next.maxVcpu}c/${next.maxMemoryMb}MB, 空闲 ${next.maxIdleDays}d 挂起 / `
+          + `${next.destroyAfterIdleDays}d 销毁`,
+        ipAddr: clientIp,
+      });
+      await db.commit();
+
+      return toDesktopQuotaOut(updated ?? quota);
+    });
+  });
+};

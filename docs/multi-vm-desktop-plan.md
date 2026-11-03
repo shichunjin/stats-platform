@@ -72,6 +72,13 @@
 | **A24** | 阶段 3「模板制作」在 10 章里只是一行文字，没有可执行口径，错了要等用户登录才发现 | 落成 `powershell/prepare-desktop-template.ps1`：共享根固化 → 脚本部署（**必须含 `lib\`**，否则登录脚本降级到 `\\127.0.0.1`）→ RDP 参数（关 NLA/`SecurityLayer=1`/禁重定向）→ 防火墙收敛（3389 只放行 guacd、22 只放行平台，**给了参数才动**，避免把运维自己挡在门外）→ OpenSSH → Guest Agent 检查 → `C:\stats-scripts\template-manifest.json`。清单里的 `login_script_ver` / `software_registry_ver` 直接对应 `desktop_templates` 的两列，用于批量核对存量 VM。退出码分级（0/2/3），非 0 不该转模板 | 10（阶段 3） |
 | **A25** | A5/A7 只说「模板里关 NLA」，没写反向约束 | **关 NLA ⇒ `.env` 必须 `GUAC_RDP_SECURITY=tls`**（配 `GUAC_RDP_IGNORE_CERT=true`）。这是方案 2.10 记的「RDP 安全配置张力」的收敛点：目标机的 NLA 状态在运行时不可知，**配置层不做自动推断**，改为在 `.env.example` 与模板脚本里显式提示 + 构建时告警 | 9.3、附录 C |
 
+### v2.5 增补（2026-11-03 管理端接口落地时）
+
+| # | 缺口 | 处理 | 影响面 |
+|---|---|---|---|
+| **A26** | 6.4 管理侧只列了路径，没定三件事：① 灰度关闭时管理端还能不能用；② 动作是同步执行还是入队；③ `/power {action}` 的 action 枚举怎么校验 | **落地 `src/routers/desktop-admin.ts`（9 个端点）**，三条取舍：① 管理端**不看 `desktopEnabled`** —— 关开关只该挡住用户的 `/desktop/ensure`，运维仍要能收尾存量 VM，否则一关开关就留一堆孤儿机；② 动作**一律入队**并返回 `task_id`，同一分钟用 `task_key` 幂等（`admin:<action>:instance:<id>:<minute>`），连点不会堆任务；③ `/power {action}` **拆成 `/suspend`、`/recycle`、`/probe` 三个端点** —— 一个字段要同时表达「挂起/回收/探活/开机」，校验分支比端点还多，且语义混杂（回收会销毁 VM，探活不产生状态迁移）。**未做**：`rebuild`（缺任务类型，需先定「保留数据盘」的重放顺序）、`prewarm`（懒创建够用）、`metrics`、模板写入 | 6.4、附录 A |
+| **A27** | 列表页要显示「最近一条任务」，最直接的写法是每行一个相关子查询 | 改为**一次 `IN (...)` 查询 + 内存折叠**（按 id 倒序取每实例第一条）：列表上限 200 行，N+1 会把管理页从十几毫秒拖到秒级。另：`desktop_quotas.max_daily_hours` 是 `numeric`，drizzle 0.33 读出来是 **string**，出向 schema 声明 `number`，必须在 mapper 里 `Number()` 收敛 —— 否则 fast-json-stringify 抛 TypeError，整个 `/admin/desktop-quotas` 500 | 6.4、附录 C |
+
 ### 未变的部分
 
 第 3 章架构、第 4 章选型（仍推荐 Proxmox VE）、第 5 章状态机与异常矩阵、
@@ -858,20 +865,26 @@ Windows 模板必须预装 **QEMU Guest Agent**（virtio-win ISO 自带）+ **Op
 
 #### 管理侧（`role in (admin, superadmin)`）
 
-| 方法 | 路径 | 说明 |
-|---|---|---|
-| GET | `/admin/desktops?status=&user=&template=&page=` | 实例列表（含 IP、VM ref、状态、时长） |
-| GET | `/admin/desktops/{id}` | 详情（含任务链、IP、guac 映射） |
-| POST | `/admin/desktops/{id}/power` | `{action: 'start'|'stop'|'suspend'|'reset'}` |
-| POST | `/admin/desktops/{id}/recycle` | `{mode:'suspend'|'destroy', keep_snapshot:true}` |
-| POST | `/admin/desktops/{id}/rebuild` | 从模板重建（保留用户数据盘） |
-| POST | `/admin/desktops/prewarm` | `{count: N, template_id}` 预建池 |
-| GET | `/admin/desktop-templates` / POST / PUT / DELETE | 模板 CRUD（含 `status` 上下线） |
-| POST | `/admin/desktop-templates/{id}/sync` | 把 `software-registry.json` 与脚本同步到模板 |
-| GET | `/admin/desktop-tasks?status=&type=` | 任务执行记录 |
-| POST | `/admin/desktop-tasks/{id}/retry` | 重试失败任务 |
-| GET | `/admin/desktop-quotas` / PUT | 配额管理（按用户/按角色） |
-| GET | `/admin/desktop-metrics` | 池水位、创建耗时 P95、失败率、在线数 |
+| 方法 | 路径 | 说明 | 落地 |
+|---|---|---|---|
+| GET | `/admin/desktops?status=&user_id=&desktop_mode=&skip=&limit=` | 实例列表：user/vm/模板/配额/最近任务**折叠成一行** | ✅ `src/routers/desktop-admin.ts` |
+| GET | `/admin/desktops/{id}` | 详情（含任务链、IP、guac 映射） | ⬜ 列表已含 VM 与最近任务，详情等前端需要时再加 |
+| POST | `/admin/desktops/{id}/power` | `{action: 'start'\|'stop'\|'suspend'\|'reset'}` | 🔁 **拆成 `/suspend`（A26）** |
+| POST | `/admin/desktops/{id}/recycle` | 回收：销毁 VM、保留实例行 | ✅（无 body，快照策略走 `DESKTOP_RECYCLE_SNAPSHOT`） |
+| POST | `/admin/desktops/{id}/probe` | 立即探活（复用自动探测的幂等键，同分钟去重） | ✅ |
+| POST | `/admin/desktops/{id}/rebuild` | 从模板重建（保留用户数据盘） | ⬜ 需 `rebuild` 任务类型，见 A26 |
+| POST | `/admin/desktops/prewarm` | `{count: N, template_id}` 预建池 | ⬜ 懒创建够用；预建池等到「首连 90s 不可接受」再上 |
+| GET | `/admin/desktop-templates` / POST / PUT / DELETE | 模板 CRUD（含 `status` 上下线） | 🔸 只读已落地；写入等模板维护流程定稿 |
+| POST | `/admin/desktop-templates/{id}/sync` | 把 `software-registry.json` 与脚本同步到模板 | ⬜ 现阶段由 `prepare-desktop-template.ps1` 手工跑（A24） |
+| GET | `/admin/desktop-tasks?status=&type=&instance_id=` | 任务执行记录（排查卡单第一入口） | ✅ |
+| POST | `/admin/desktop-tasks/{id}/retry` | 重试 **failed** 任务（attempts 归零） | ✅ |
+| GET | `/admin/desktop-quotas` / PUT | 配额管理（规格分档的唯一入口） | ✅ PUT 带跨字段校验（default ≤ max、销毁 ≥ 挂起） |
+| GET | `/admin/desktop-metrics` | 池水位、创建耗时 P95、失败率、在线数 | ⬜ `poolStatus()` / `queueDepth()` 已就绪，等告警需求定口径 |
+
+> **两条管理侧设计取舍（A26）**：
+> ① 这些接口**不看灰度开关** —— `desktopEnabled=false` 只挡用户的 `/desktop/ensure`，
+> 运维仍要能收尾存量 VM，否则一关开关就留下孤儿机；
+> ② 动作**一律入队**（返回 `task_id`），克隆/关机是分钟级，HTTP 里同步做必然超时。
 
 #### 回调/内部
 
@@ -1484,6 +1497,7 @@ if (mode === 'rds') {
 | `src/desktop/service/recycle.ts` | 空闲挂起 / 销毁 + 快照 + 释放 IP + `revokeConnectionRead` |
 | `src/desktop/service/reconcile.ts` | 对账：Provider 实际 VM ↔ `desktop_vms` 差异修正 |
 | `src/desktop/worker.ts` | `setInterval` + `FOR UPDATE SKIP LOCKED` 消费 `desktop_tasks`；启动时重置 stale `running` |
+| `src/routers/desktop-admin.ts` | 管理端 9 个端点：实例列表 / 任务队列 / 挂起·回收·探活 / 任务重跑 / 模板只读 / 配额读写（A26） |
 | `powershell/lib/stats-config.ps1` | 共享根（文件服务器）单一实现：`Resolve-StatsFileServer` / `Set-StatsFileServer` / UNC 规整；被 4 个 Windows 脚本 dot-source（A23） |
 | `powershell/prepare-desktop-template.ps1` | 模板固化：共享根 + 脚本部署 + RDP 参数 + 防火墙 + OpenSSH + Guest Agent 检查 + `template-manifest.json`（A24） |
 | `src/db/schema.desktop.ts` | 7 张表的 Drizzle 定义（也可直接并入 `schema.ts`，二选一，不要两处都写） |
