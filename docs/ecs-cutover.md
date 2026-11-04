@@ -69,7 +69,14 @@ DESKTOP_GATEWAY=172.25.3.1
 ```
 
 > `DESKTOP_SUBNET` 必须落在 VSwitch 网段内，且池子里的地址要预先灌进
-> `desktop_ip_allocations`（`subnet` 列与 `DESKTOP_SUBNET` 一致，`state='free'`）。
+> `desktop_ip_allocations`——用灌池脚本（默认 dry-run，确认后 `--apply` 写库，
+> 幂等可重跑，自动排除网络/广播/网关地址）：
+>
+> ```bash
+> npx tsx scripts/seed-ip-pool.ts                      # dry-run，按 .env 的 DESKTOP_SUBNET 出计划
+> npx tsx scripts/seed-ip-pool.ts --apply              # 确认无误后写库
+> # 灰度想先小池子：npx tsx scripts/seed-ip-pool.ts --first 20 --apply
+> ```
 
 ```bash
 npm run build && systemctl restart stats-platform && sleep 12
