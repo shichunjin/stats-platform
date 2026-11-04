@@ -108,5 +108,21 @@ export const httpErrorHandler = (
     return;
   }
 
+  /**
+   * DesktopError：DMS 的**配置类**失败（模板 provider 对不上、没有可用模板…）。
+   *
+   * 这类错误抛到默认处理器会变成 500「Internal Server Error」，把真因吞掉——
+   * 而它恰恰是运维最需要看见的那句话（切 ECS 后模板还是 proxmox 就属于这一类）。
+   * 用鸭子类型判断而不是 import：guards 是底层模块，不该反向依赖 desktop 业务。
+   */
+  const desktop = error as { name?: string; code?: string; message?: string };
+  if (error instanceof Error && desktop.name === 'DesktopError') {
+    void reply.code(503).send({
+      detail: desktop.message ?? '云桌面暂不可用',
+      code: desktop.code ?? 'DESKTOP_UNAVAILABLE',
+    });
+    return;
+  }
+
   throw error;
 };

@@ -58,6 +58,10 @@ beforeEach(async () => {
 
 afterEach(() => {
   resetSettings();
+  // ⚠️ resetSettings 目前是「自我赋值」（settings 与 initialSettings 同一对象引用），
+  // 覆盖过的字段不会还原。本文件改过 desktopProvider，必须显式还原，
+  // 否则会污染同进程内的后续用例（singleFork）。
+  overrideSettings({ desktopProvider: 'proxmox' });
   resetDesktopProvider();
 });
 
@@ -77,6 +81,23 @@ describe('POST /desktop/ensure（灰度与幂等）', () => {
       mode: 'rds', instance_id: null, status: null, ready: false,
       created: false, task_id: null, vm_ip: null,
     });
+    expect(await countInstances()).toBe(0);
+  });
+
+  it('模板 provider 与当前 DESKTOP_PROVIDER 不一致 → 503 且不建实例', async () => {
+    // 切到 ecs 但库里只有 proxmox 模板：不能把 'pve1/9001' 当镜像 ID 丢给阿里云
+    overrideSettings({ desktopEnabled: true, desktopProvider: 'ecs' });
+    await insertTemplate();
+    const alice = await seedUser({ username: 'alice' });
+    await setVmMode('alice');
+
+    const response = await request(app, { method: 'POST', url: '/desktop/ensure', user: alice });
+
+    expect(response.statusCode).toBe(503);
+    const body = response.json<{ detail: string; code: string }>();
+    expect(body.code).toBe('TEMPLATE_PROVIDER_MISMATCH');
+    expect(body.detail).toContain('DESKTOP_PROVIDER=ecs');
+    // 失败必须发生在建实例之前，否则会留下一条永远建不起来的实例行
     expect(await countInstances()).toBe(0);
   });
 

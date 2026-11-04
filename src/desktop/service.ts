@@ -15,7 +15,7 @@ import type { AppDatabase } from '../db/client.js';
 import {
   deskInstances, desktopIpAllocations, desktopTemplates, desktopVms,
   guacConnectionMap, users, type DeskInstance, type DeskInstanceStatus,
-  type DesktopQuota, type DesktopTemplate, type DesktopVm, type User,
+  type DesktopProviderKind, type DesktopQuota, type DesktopTemplate, type DesktopVm, type User,
 } from '../db/schema.js';
 import { withSession } from '../db/session.js';
 import { ensureUserConnectionDetail, guacSyncEnabled, hashParameters, buildRdpParameters } from '../integrations/guac.js';
@@ -121,20 +121,60 @@ export const allocateIpFromPool = async (
     return allocated;
   });
 
+/**
+ * 选模板：配额绑定优先，否则取该 provider 的默认模板。
+ *
+ * ⚠️ **必须校验 provider 一致性**：`provider_ref` 的语义随 provider 变
+ * （Proxmox = 'node/vmid'，ECS = 自定义镜像 ID）。切到 `DESKTOP_PROVIDER=ecs` 后
+ * 若仍命中一条 proxmox 模板，`clone` 会把 'pve1/9001' 当镜像 ID 丢给阿里云，
+ * 报错信息完全指不到病根。这里在**建实例之前**就拒绝，并说清怎么修。
+ */
 const pickTemplate = async (
   db: DbLike,
   quota: DesktopQuota | null,
+  providerKind: DesktopProviderKind,
 ): Promise<DesktopTemplate> => {
   if (quota?.templateId) {
     const [byQuota] = await db.db.select().from(desktopTemplates)
       .where(eq(desktopTemplates.id, quota.templateId)).limit(1);
-    if (byQuota) return byQuota;
+    if (byQuota) {
+      if (byQuota.provider !== providerKind) {
+        throw new DesktopError(
+          'TEMPLATE_PROVIDER_MISMATCH',
+          `配额 ${quota.code} 绑定的模板 ${byQuota.code} 属于 ${byQuota.provider}，`
+          + `但当前 DESKTOP_PROVIDER=${providerKind}。请改绑同 provider 的模板，或调整配额 template_id。`,
+        );
+      }
+      return byQuota;
+    }
   }
   const [fallback] = await db.db.select().from(desktopTemplates)
+    .where(and(
+      eq(desktopTemplates.isDefault, true),
+      eq(desktopTemplates.status, 'active'),
+      eq(desktopTemplates.provider, providerKind),
+    ))
+    .limit(1);
+  if (fallback) return fallback;
+
+  // 没有本 provider 的默认模板：区分「压根没模板」与「有模板但 provider 不对」，
+  // 后者的报错必须点名那条模板，否则运维会去查错方向（以为是配额/权限问题）。
+  const [other] = await db.db.select().from(desktopTemplates)
     .where(and(eq(desktopTemplates.isDefault, true), eq(desktopTemplates.status, 'active')))
     .limit(1);
-  if (!fallback) throw new DesktopError('NO_TEMPLATE', '没有可用的桌面模板（请先在 desktop_templates 中录入并置为默认）');
-  return fallback;
+  if (other !== undefined) {
+    throw new DesktopError(
+      'TEMPLATE_PROVIDER_MISMATCH',
+      `默认模板 ${other.code} 属于 ${other.provider}，但当前 DESKTOP_PROVIDER=${providerKind}；`
+      + `请登记一条 provider='${providerKind}' 的模板并设为默认（POST /admin/desktop-templates）`,
+    );
+  }
+  throw new DesktopError(
+    'NO_TEMPLATE',
+    `没有可用的 ${providerKind} 桌面模板（desktop_templates 里需要一条 `
+    + `provider='${providerKind}' 且 is_default=true、status='active' 的记录；`
+    + '可用 POST /admin/desktop-templates 登记）',
+  );
 };
 
 export type EnsureOutcome =
@@ -173,12 +213,16 @@ export const ensureDesktop = async (user: User): Promise<EnsureOutcome> => {
   }
 
   const { desktopSubnet, desktopNamePrefix } = getSettings();
+  // 期望的 provider：注入的替身优先（测试/灰度），否则用配置枚举。
+  // 不在这里因「provider 未配置」而拒绝 —— 该错误由 create 任务报得更准确，
+  // ensure 的语义是「受理」，过早失败反而让前端看不懂。
+  const providerKind = getDesktopProvider()?.kind ?? getSettings().desktopProvider;
 
   const created = await withSession(async (db) => {
     const quota = user.desktopQuotaId === null ? null : await db.db.query.desktopQuotas
       .findFirst({ where: (row, { eq: eqOp }) => eqOp(row.id, user.desktopQuotaId!) }) ?? null;
 
-    const template = await pickTemplate(db, quota);
+    const template = await pickTemplate(db, quota, providerKind);
     const spec = resolveVmSpec(
       { template, quota },
       `${desktopNamePrefix}${user.username}`,

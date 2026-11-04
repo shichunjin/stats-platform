@@ -12,7 +12,7 @@ import type { FastifyInstance } from 'fastify';
 import {
   afterAll, afterEach, beforeEach, describe, expect, it,
 } from 'vitest';
-import { resetSettings } from '../../src/config/env.js';
+import { overrideSettings, resetSettings } from '../../src/config/env.js';
 import {
   deskInstances, desktopQuotas, desktopTasks, desktopTemplates, desktopVms,
   type DeskInstanceStatus, type DesktopTaskStatus, type DesktopTaskType,
@@ -131,6 +131,9 @@ beforeEach(async () => {
 
 afterEach(() => {
   resetSettings();
+  // resetSettings 是自我赋值（settings 与 initialSettings 同一引用），覆盖不还原；
+  // 本文件改过 desktopProvider，必须显式还原，避免污染同进程后续用例（singleFork）
+  overrideSettings({ desktopProvider: 'proxmox' });
 });
 
 afterAll(async () => {
@@ -519,5 +522,96 @@ describe('模板与配额', () => {
       payload: { template_id: 9999 },
     });
     expect(response.statusCode).toBe(422);
+  });
+});
+
+describe('POST /admin/desktop-templates（模板登记）', () => {
+  const ecsTemplate = {
+    code: 'win2022-ecs-v1',
+    name: '统计软件桌面（ECS）',
+    provider: 'ecs',
+    provider_ref: 'm-win2022stats1',
+    vcpu: 4,
+    memory_mb: 8192,
+    disk_gb: 120,
+  };
+
+  it('登记 ECS 模板：provider 必须与 DESKTOP_PROVIDER 一致', async () => {
+    overrideSettings({ desktopProvider: 'ecs' });
+    const admin = await seedUser({ username: 'root', role: 'admin' });
+
+    const response = await request(app, {
+      method: 'POST',
+      url: '/admin/desktop-templates',
+      user: admin,
+      payload: { ...ecsTemplate, is_default: true },
+    });
+
+    expect(response.statusCode).toBe(200);
+    const body = response.json<Record<string, unknown>>();
+    expect(body.provider).toBe('ecs');
+    expect(body.provider_ref).toBe('m-win2022stats1');
+    expect(body.is_default).toBe(true);
+    expect((await findAudit('desktop_template_upsert'))?.userId).toBe(admin.id);
+  });
+
+  it('provider 与配置不一致 → 422（混着登记只会在创建时才炸）', async () => {
+    const admin = await seedUser({ username: 'root', role: 'admin' });
+
+    const response = await request(app, {
+      method: 'POST',
+      url: '/admin/desktop-templates',
+      user: admin,
+      // 默认 DESKTOP_PROVIDER=proxmox，却登记 ecs 模板
+      payload: ecsTemplate,
+    });
+
+    expect(response.statusCode).toBe(422);
+    expect(response.json<{ detail: string }>().detail).toContain('DESKTOP_PROVIDER');
+  });
+
+  it('provider_ref 格式错误 → 422（ECS 必须是镜像 ID）', async () => {
+    overrideSettings({ desktopProvider: 'ecs' });
+    const admin = await seedUser({ username: 'root', role: 'admin' });
+
+    const response = await request(app, {
+      method: 'POST',
+      url: '/admin/desktop-templates',
+      user: admin,
+      payload: { ...ecsTemplate, provider_ref: 'pve1/9001' },
+    });
+
+    expect(response.statusCode).toBe(422);
+    expect(response.json<{ detail: string }>().detail).toContain('镜像 ID');
+  });
+
+  it('设为默认时取消旧默认（默认模板必须全局唯一）', async () => {
+    overrideSettings({ desktopProvider: 'ecs' });
+    const admin = await seedUser({ username: 'root', role: 'admin' });
+
+    const first = await request(app, {
+      method: 'POST',
+      url: '/admin/desktop-templates',
+      user: admin,
+      payload: { ...ecsTemplate, is_default: true },
+    });
+    expect(first.statusCode).toBe(200);
+
+    const second = await request(app, {
+      method: 'POST',
+      url: '/admin/desktop-templates',
+      user: admin,
+      payload: {
+        ...ecsTemplate,
+        code: 'win2022-ecs-v2',
+        provider_ref: 'm-win2022stats2',
+        is_default: true,
+      },
+    });
+    expect(second.statusCode).toBe(200);
+
+    const defaults = await withSession(async (db) => db.db.select({ code: desktopTemplates.code })
+      .from(desktopTemplates).where(eq(desktopTemplates.isDefault, true)));
+    expect(defaults.map((row) => row.code)).toEqual(['win2022-ecs-v2']);
   });
 });

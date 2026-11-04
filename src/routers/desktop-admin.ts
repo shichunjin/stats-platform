@@ -10,7 +10,8 @@
  *   POST /admin/desktops/:instance_id/rebuild  从模板重建（规格按当前配额重算）
  *   POST /admin/desktops/:instance_id/probe    立即探活
  *   POST /admin/desktop-tasks/:task_id/retry   重跑失败任务
- *   GET  /admin/desktop-templates            模板列表（只读：模板在 Proxmox 侧建，这里只是登记）
+ *   GET  /admin/desktop-templates            模板列表（只读：模板在 Proxmox/ECS 侧建，这里只是登记）
+ *   POST /admin/desktop-templates            登记/更新模板（provider 必须与当前 DESKTOP_PROVIDER 一致）
  *   GET  /admin/desktop-quotas               配额列表
  *   PUT  /admin/desktop-quotas/:quota_id     改配额（规格分档的唯一入口）
  *
@@ -20,11 +21,12 @@
  *  2. **动作一律入队，不同步执行**。克隆/关机是分钟级，HTTP 里同步做必然超时；
  *     这里只负责「可靠地排进 `desktop_tasks`」，执行交给 worker。
  */
-import { and, asc, desc, eq, inArray } from 'drizzle-orm';
+import { and, asc, desc, eq, inArray, sql } from 'drizzle-orm';
 import type { FastifyPluginAsync, FastifyRequest } from 'fastify';
 import { z } from 'zod';
 import { recordAudit } from '../audit.js';
 import { HttpError, authenticate, requireAdmin } from '../auth/guards.js';
+import { getSettings } from '../config/env.js';
 import {
   deskInstances, desktopQuotas, desktopTemplates, desktopTasks, desktopVms, users,
   type DeskInstanceStatus, type DesktopTask, type User,
@@ -94,6 +96,33 @@ const quotaUpdateSchema = z.object({
   destroy_after_idle_days: z.number().int().min(1).max(365).optional(),
   allow_rebuild: z.boolean().optional(),
   template_id: z.number().int().positive().nullable().optional(),
+}).strict();
+
+/**
+ * 模板登记（upsert by code）。
+ *
+ * 为什么需要写接口：`provider_ref` 的语义随 provider 变 —— Proxmox 是 'pve1/9001'，
+ * ECS 是自定义镜像 ID 'm-xxx'。切 ECS 时如果只能手写 SQL，运维很容易填错格式，
+ * 而错误要到第一次 RunInstances 才暴露（报的是镜像不存在，指不到病根）。
+ */
+const templateUpsertSchema = z.object({
+  code: z.string().min(1).max(64).openapi({ description: "模板编码，如 'win2022-stats-v1'（唯一，重复即更新）" }),
+  name: z.string().min(1).max(128),
+  provider: z.enum(['proxmox', 'libvirt', 'vmware', 'hyperv', 'ecs'])
+    .openapi({ description: '必须等于当前 .env 的 DESKTOP_PROVIDER' }),
+  provider_ref: z.string().min(1).max(128)
+    .openapi({ description: "Proxmox 'pve1/9001' / ECS 自定义镜像 ID 'm-xxx'" }),
+  provider_node: z.string().max(64).optional(),
+  os_type: z.string().min(1).max(32).default('windows'),
+  os_version: z.string().max(64).optional(),
+  vcpu: z.number().int().min(1).max(128),
+  memory_mb: z.number().int().min(512).max(262_144),
+  disk_gb: z.number().int().min(20).max(4_096),
+  storage: z.string().max(64).optional(),
+  guest_username: z.string().max(64).optional(),
+  status: z.enum(['active', 'disabled', 'building', 'error']).default('active'),
+  is_default: z.boolean().default(false),
+  max_instances: z.number().int().min(1).max(10).optional(),
 }).strict();
 
 /** 可挂起的状态：只有「真的跑着或可连」的实例才值得挂起，其余状态入队只会白跑一次 */
@@ -485,6 +514,106 @@ export const desktopAdminRoutes: FastifyPluginAsync = async (app) => {
       await db.commit();
 
       return toDesktopQuotaOut(updated ?? quota);
+    });
+  });
+
+  /* ---------------- 模板登记（provider_ref 的语义随 provider 变） ---------------- */
+
+  app.post<{ Body: z.infer<typeof templateUpsertSchema> }>('/admin/desktop-templates', {
+    schema: asRouteSchema({
+      body: templateUpsertSchema,
+      response: { 200: desktopTemplateOutSchema },
+    }),
+    preHandler: [authenticate, requireAdmin],
+  }, async (request) => {
+    const admin = request.user as User;
+    const clientIp = getClientIp(request);
+    const { body } = request;
+    const providerKind = getSettings().desktopProvider;
+
+    // 只允许登记「当前 provider」的模板：混着登记会让 pickTemplate 在建实例时才报错，
+    // 而这个错误要到 worker 日志里才能看见。
+    if (body.provider !== providerKind) {
+      throw new HttpError(
+        422,
+        `模板 provider='${body.provider}' 与当前 DESKTOP_PROVIDER='${providerKind}' 不一致；`
+        + `切换 provider 请先改 .env 并重启，再登记对应模板`,
+      );
+    }
+    // provider_ref 格式轻校验：写错只会在创建时炸，且报错完全指不到病根
+    if (body.provider === 'ecs' && !/^[mami]-/.test(body.provider_ref)) {
+      throw new HttpError(422, "ECS 模板的 provider_ref 应是自定义镜像 ID（形如 'm-xxxx' 或 'ami-xxxx'）");
+    }
+    if (body.provider === 'proxmox' && !/^(\d+|[^/]+\/\d+)$/.test(body.provider_ref)) {
+      throw new HttpError(422, "Proxmox 模板的 provider_ref 应是 '<node>/<vmid>' 或纯 vmid（如 'pve1/9001'）");
+    }
+    if (body.is_default && body.status !== 'active') {
+      throw new HttpError(422, '只有 active 模板才能设为默认');
+    }
+
+    return app.withDb(async (db) => {
+      // ⚠️ 顺序不能反：`uq_desktop_templates_default` 是「is_default=true 唯一」的
+      // 部分索引，先 upsert 新默认再取消旧默认会立刻撞索引（500）。
+      // 必须先让出默认位，再写入新的默认。
+      if (body.is_default) {
+        await db.db.update(desktopTemplates)
+          .set({ isDefault: false })
+          .where(and(
+            eq(desktopTemplates.isDefault, true),
+            sql`${desktopTemplates.code} <> ${body.code}`,
+          ));
+      }
+
+      const [saved] = await db.db.insert(desktopTemplates).values({
+        code: body.code,
+        name: body.name,
+        osType: body.os_type,
+        osVersion: body.os_version ?? null,
+        provider: body.provider,
+        providerRef: body.provider_ref,
+        providerNode: body.provider_node ?? null,
+        vcpu: body.vcpu,
+        memoryMb: body.memory_mb,
+        diskGb: body.disk_gb,
+        storage: body.storage ?? null,
+        guestUsername: body.guest_username ?? null,
+        status: body.status,
+        isDefault: body.is_default,
+        maxInstances: body.max_instances ?? null,
+      }).onConflictDoUpdate({
+        target: desktopTemplates.code,
+        // 同一 code 视为「更新登记」：镜像重建（新 image id）后直接覆盖，不必先删
+        set: {
+          name: body.name,
+          osType: body.os_type,
+          osVersion: body.os_version ?? null,
+          provider: body.provider,
+          providerRef: body.provider_ref,
+          providerNode: body.provider_node ?? null,
+          vcpu: body.vcpu,
+          memoryMb: body.memory_mb,
+          diskGb: body.disk_gb,
+          storage: body.storage ?? null,
+          guestUsername: body.guest_username ?? null,
+          status: body.status,
+          isDefault: body.is_default,
+          maxInstances: body.max_instances ?? null,
+          updatedAt: new Date(),
+        },
+      }).returning();
+
+      // 默认模板全局唯一（上面的预清理已保证不会撞部分唯一索引）
+      await recordAudit(db, {
+        userId: admin.id,
+        action: 'desktop_template_upsert',
+        detail: `管理员 ${admin.username} 登记模板 ${body.code}（${body.provider}）`
+          + ` ref=${body.provider_ref} spec=${body.vcpu}c/${body.memory_mb}MB`
+          + `${body.is_default ? ' 设为默认' : ''}`,
+        ipAddr: clientIp,
+      });
+      await db.commit();
+
+      return toDesktopTemplateOut(saved!);
     });
   });
 };

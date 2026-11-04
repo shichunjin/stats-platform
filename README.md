@@ -185,12 +185,16 @@ npm run db:migrate-sqlite -- --sqlite ./stats_platform.db --pg-url "postgres://.
 | POST | `/admin/desktops/{id}/probe` | 立即探活（与自动探测同分钟去重） | 管理员 |
 | POST | `/admin/desktops/{id}/rebuild` | 从模板重建（销毁后重克隆，规格按当前配额重算，账号需重新登录补建） | 管理员 |
 | POST | `/admin/desktop-tasks/{id}/retry` | 重跑 **failed** 任务（attempts 归零） | 管理员 |
-| GET | `/admin/desktop-templates` | 桌面模板列表（只读，模板本身在 Proxmox/ECS 侧建） | 管理员 |
+| GET | `/admin/desktop-templates` | 桌面模板列表（模板本身在 Proxmox/ECS 侧建，这里只登记元数据） | 管理员 |
+| POST | `/admin/desktop-templates` | 登记/更新模板（upsert by `code`；`provider` 必须等于 `DESKTOP_PROVIDER`，`provider_ref` 按 provider 校验格式） | 管理员 |
 | GET/PUT | `/admin/desktop-quotas` | 配额读写（规格分档的唯一入口） | 管理员 |
 
 > 云桌面相关接口**不看灰度开关**：`desktopEnabled=false` 只挡用户的 `/desktop/ensure`，
 > 管理端必须始终可用，否则关开关就留下一堆无人收尾的 VM。详见
 > `docs/multi-vm-desktop-plan.md` 6.4 与 A26。
+>
+> 切到「一用户一 VM」（含阿里云 ECS）的完整操作顺序见 `docs/ecs-cutover.md`；
+> 签名/权限/镜像可用性用 `npx tsx scripts/ecs-smoke.ts --image m-xxx` 冒烟。
 
 ## 数据库表
 
