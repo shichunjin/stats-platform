@@ -127,6 +127,19 @@ describe('clone：RunInstances 创建即定规格', () => {
     await provider.clone(template, { name: 'DESK-bob', vcpu: 2, memoryMb: 4096 });
     expect(paramsOf(calls[0]!).get('PrivateIpAddress')).toBeNull();
     expect(paramsOf(calls[0]!).get('Password')).toBeNull();
+    // 默认（同 VPC 私网部署）不分配公网 IP
+    expect(paramsOf(calls[0]!).get('AllocatePublicIpAddress')).toBeNull();
+  });
+
+  it('allocatePublicIp=true 时 RunInstances 带 AllocatePublicIpAddress=true（guacd 在 VPC 外）', async () => {
+    const calls: Recorded[] = [];
+    const provider = createAliyunEcsProvider(
+      { ...config, allocatePublicIp: true },
+      makeFetch({ RunInstances: { data: { InstanceIdSets: ['i-3'] } } }, calls),
+    );
+
+    await provider.clone(template, { name: 'DESK-carol', vcpu: 4, memoryMb: 8192 });
+    expect(paramsOf(calls[0]!).get('AllocatePublicIpAddress')).toBe('true');
   });
 });
 
@@ -236,6 +249,37 @@ describe('inspect', () => {
     expect(await released.inspect('i-gone')).toEqual({
       powerState: 'unknown', primaryIp: null, agentReady: false,
     });
+  });
+
+  it('allocatePublicIp=true 时 primaryIp 优先公网地址；false 时即使有公网地址也回私网', async () => {
+    const instance = {
+      Status: 'Running',
+      VpcAttributes: { PrivateIpAddress: { IpAddress: ['172.25.3.11'] } },
+      PublicIpAddress: { IpAddress: ['47.100.1.2'] },
+    };
+
+    const publicMode = createAliyunEcsProvider(
+      { ...config, allocatePublicIp: true },
+      makeFetch({ DescribeInstances: { data: { Instances: { Instance: [instance] } } } }, []),
+    );
+    expect((await publicMode.inspect('i-1')).primaryIp).toBe('47.100.1.2');
+
+    const privateMode = createAliyunEcsProvider(
+      config,
+      makeFetch({ DescribeInstances: { data: { Instances: { Instance: [instance] } } } }, []),
+    );
+    expect((await privateMode.inspect('i-1')).primaryIp).toBe('172.25.3.11');
+
+    // 公网模式下实例还没拿到公网地址时回落私网，不返回 null 卡住探活
+    const pending = createAliyunEcsProvider(
+      { ...config, allocatePublicIp: true },
+      makeFetch({
+        DescribeInstances: {
+          data: { Instances: { Instance: [{ Status: 'Running', VpcAttributes: { PrivateIpAddress: { IpAddress: ['172.25.3.12'] } } }] } },
+        },
+      }, []),
+    );
+    expect((await pending.inspect('i-2')).primaryIp).toBe('172.25.3.12');
   });
 });
 

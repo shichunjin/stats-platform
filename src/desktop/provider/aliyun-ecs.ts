@@ -29,6 +29,8 @@ export interface AliyunEcsConfig {
   readonly initialPassword?: string;
   readonly systemDiskCategory?: string;
   readonly stopCharging: boolean;
+  /** true = RunInstances 分配公网 IP（guacd/平台在 VPC 外时必开，否则 VM 不可达） */
+  readonly allocatePublicIp?: boolean;
   readonly timeoutMs?: number;
 }
 
@@ -142,7 +144,7 @@ export const createAliyunEcsProvider = (
   /** DescribeInstances 单实例查询；实例不存在（已释放）返回 null */
   const describeInstance = async (
     ref: string,
-  ): Promise<{ status: string; privateIp: string | null } | null> => {
+  ): Promise<{ status: string; privateIp: string | null; publicIp: string | null } | null> => {
     const data = await call('DescribeInstances', {
       RegionId: config.regionId,
       InstanceIds: JSON.stringify([ref]),
@@ -151,8 +153,12 @@ export const createAliyunEcsProvider = (
     const first = instances[0];
     if (first === undefined) return null;
     const vpc = first.VpcAttributes as { PrivateIpAddress?: { IpAddress?: readonly string[] } } | undefined;
-    const privateIp = vpc?.PrivateIpAddress?.IpAddress?.[0] ?? null;
-    return { status: String(first.Status ?? ''), privateIp };
+    const publicIps = first.PublicIpAddress as { IpAddress?: readonly string[] } | undefined;
+    return {
+      status: String(first.Status ?? ''),
+      privateIp: vpc?.PrivateIpAddress?.IpAddress?.[0] ?? null,
+      publicIp: publicIps?.IpAddress?.[0] ?? null,
+    };
   };
 
   /** 轮询直至实例进入期望状态或超时（deadline 语义与 Proxmox.shutdown 一致） */
@@ -217,6 +223,7 @@ export const createAliyunEcsProvider = (
         InstanceChargeType: 'PostPaid',
         Amount: 1,
         ...(config.initialPassword === '' ? {} : { Password: config.initialPassword }),
+        ...(config.allocatePublicIp === true ? { AllocatePublicIpAddress: true } : {}),
         ...(spec.staticIp === undefined ? {} : { PrivateIpAddress: spec.staticIp }),
         ...(config.systemDiskCategory === undefined || config.systemDiskCategory === ''
           ? {}
@@ -295,7 +302,11 @@ export const createAliyunEcsProvider = (
       if (instance.status === 'Stopped') powerState = 'stopped';
       return {
         powerState,
-        primaryIp: instance.privateIp,
+        // 公网模式（guacd 在 VPC 外）：guacamole/探活/SSH 都连公网地址，优先回读；
+        // 私网模式：VpcAttributes 的私网 IP（静态 IP 池语义）
+        primaryIp: config.allocatePublicIp === true
+          ? (instance.publicIp ?? instance.privateIp)
+          : instance.privateIp,
         // ECS 没有 qemu-guest-agent；Guest 可用性由 DMS 的 3389 探活任务负责
         agentReady: true,
       };
@@ -343,5 +354,6 @@ export const fingerprintOfEcs = (settings: ReturnType<typeof getSettings>): stri
   settings.aliyunAccessKeyId, settings.aliyunAccessKeySecret, settings.aliyunRegionId,
   settings.aliyunVswitchId, settings.aliyunSecurityGroupId, settings.aliyunInstanceType,
   settings.aliyunInitialPassword, settings.aliyunSystemDiskCategory,
-  String(settings.aliyunStopCharging), String(settings.aliyunTimeoutMs),
+  String(settings.aliyunStopCharging), String(settings.aliyunAllocatePublicIp),
+  String(settings.aliyunTimeoutMs),
 ].join('|');

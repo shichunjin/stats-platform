@@ -318,6 +318,7 @@ export const getDesktopProvider = (
       ...(settings.aliyunInitialPassword === '' ? {} : { initialPassword: settings.aliyunInitialPassword }),
       ...(settings.aliyunSystemDiskCategory === '' ? {} : { systemDiskCategory: settings.aliyunSystemDiskCategory }),
       stopCharging: settings.aliyunStopCharging,
+      allocatePublicIp: settings.aliyunAllocatePublicIp,
       timeoutMs: settings.aliyunTimeoutMs,
     });
     cached = { fingerprint, provider };

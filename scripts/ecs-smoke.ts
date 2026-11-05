@@ -85,6 +85,7 @@ const main = async (): Promise<number> => {
     ...(settings.aliyunSystemDiskCategory === ''
       ? {} : { systemDiskCategory: settings.aliyunSystemDiskCategory }),
     stopCharging: settings.aliyunStopCharging,
+    allocatePublicIp: settings.aliyunAllocatePublicIp,
     timeoutMs: settings.aliyunTimeoutMs,
   };
   const provider = createAliyunEcsProvider(config);

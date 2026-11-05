@@ -320,6 +320,12 @@ export const settingsSchema = z.object({
   aliyunSystemDiskCategory: z.string().default(''),
   /** 空闲挂起映射为节省停机模式（StopInstance StoppedMode=StopCharging）；账号未开启时改走普通停机 */
   aliyunStopCharging: boolFromEnv(false),
+  /**
+   * guacd / 平台服务器不在该 VPC 内时置 true：RunInstances 分配公网 IP，
+   * inspect 的 primaryIp 回读公网地址（guacamole/探活/SSH 同步都走它）。
+   * 同 VPC 部署保持 false——私网互通，公网面暴露越小越好。
+   */
+  aliyunAllocatePublicIp: boolFromEnv(false),
   aliyunTimeoutMs: intFromEnv(15_000),
 });
 
