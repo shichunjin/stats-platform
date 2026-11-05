@@ -58,15 +58,23 @@ ALIYUN_ACCESS_KEY_SECRET=...
 ALIYUN_REGION_ID=cn-hangzhou
 ALIYUN_VSWITCH_ID=vsw-xxx
 ALIYUN_SECURITY_GROUP_ID=sg-xxx
-ALIYUN_INSTANCE_TYPE=ecs.g6.xlarge
+ALIYUN_INSTANCE_TYPE=ecs.g8i.xlarge
 ALIYUN_INITIAL_PASSWORD=<强密码>   # VM 首启后由改密链路立即换掉
 ALIYUN_SYSTEM_DISK_CATEGORY=cloud_essd
 ALIYUN_STOP_CHARGING=false        # 账号未开「停机不收费」时保持 false
+ALIYUN_ALLOCATE_PUBLIC_IP=false   # guacd/平台不在本 VPC 内时改 true，否则 VM 外网不可达
 
 # 静态 IP 池（可选但推荐：开机即可连，不必等 Guest 回读）
 DESKTOP_SUBNET=172.25.3.0/24
 DESKTOP_GATEWAY=172.25.3.1
 ```
+
+> ⚠️ **机型必须是 x86**：`g6r`、`g8y`、`c8y` 等是倚天 ARM 实例，**不支持 Windows 镜像**。
+> 控制台搜 "g6" 很容易误选 `g6r`，直到 `--create` 冒烟才以「镜像与实例规格不匹配」暴露。
+> `*.xlarge`（4 vCPU / 16 GiB）是 30 并发下的推荐档位。
+>
+> 按量付费 vCPU 配额要够：4 vCPU × 30 台 = 120 vCPU，先在配额中心确认该地域的
+> 「按量付费实例 vCPU 配额」有余量，否则大批量创建时才报 `QuotaExceeded.Instance`。
 
 > `DESKTOP_SUBNET` 必须落在 VSwitch 网段内，且池子里的地址要预先灌进
 > `desktop_ip_allocations`——用灌池脚本（默认 dry-run，确认后 `--apply` 写库，
